@@ -70,14 +70,16 @@ def get_or_create_session(conn: pyodbc.Connection, working_dir: str = None,
     return None
 
 
-def log_hook_event(conn: pyodbc.Connection, session_id: str, event_name: str, raw_json: str) -> Optional[int]:
+def log_hook_event(conn: pyodbc.Connection, session_id: str, event_name: str, raw_json: str,
+                   claude_session_id: str = None, transcript_path: str = None,
+                   cwd: str = None, permission_mode: str = None) -> Optional[int]:
     """Insert hook event and return EventId."""
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO HookEvents (SessionId, EventName, RawJson)
+        INSERT INTO HookEvents (SessionId, EventName, RawJson, ClaudeSessionId, TranscriptPath, Cwd, PermissionMode)
         OUTPUT INSERTED.EventId
-        VALUES (?, ?, ?)
-    """, (session_id, event_name, raw_json))
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (session_id, event_name, raw_json, claude_session_id, transcript_path, cwd, permission_mode))
 
     row = cursor.fetchone()
     conn.commit()
@@ -301,10 +303,25 @@ def parse_transcript(transcript_path: str) -> list:
     return messages
 
 
-def log_messages(conn: pyodbc.Connection, session_id: str, messages: list):
-    """Insert parsed messages into Messages table."""
+def log_messages(conn: pyodbc.Connection, session_id: str, messages: list, deduplicate: bool = False):
+    """Insert parsed messages into Messages table.
+
+    Args:
+        conn: Database connection
+        session_id: Session ID
+        messages: List of message dicts
+        deduplicate: If True, skip messages that already exist (by MessageUuid)
+    """
     cursor = conn.cursor()
     for msg in messages:
+        msg_uuid = msg.get('uuid')
+
+        # Skip if already exists (deduplication)
+        if deduplicate and msg_uuid:
+            cursor.execute("SELECT 1 FROM Messages WHERE MessageUuid = ?", (msg_uuid,))
+            if cursor.fetchone():
+                continue
+
         # Convert ISO timestamp string to naive datetime (SQL Server friendly)
         ts = msg.get('timestamp')
         if ts and isinstance(ts, str):
@@ -319,7 +336,7 @@ def log_messages(conn: pyodbc.Connection, session_id: str, messages: list):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
-            msg.get('uuid'),
+            msg_uuid,
             msg.get('parent_uuid'),
             msg.get('role'),
             msg.get('content'),
@@ -394,15 +411,21 @@ def log_event(event_type: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
     try:
         raw_json = json.dumps(input_data)
 
-        # Extract claude_session_id for concurrent session safety
+        # Extract common fields from all payloads
         claude_session_id = input_data.get('session_id')
+        transcript_path = input_data.get('transcript_path')
+        cwd = input_data.get('cwd')
+        permission_mode = input_data.get('permission_mode')
 
         session_id = get_or_create_session(conn, claude_session_id=claude_session_id)
 
         if not session_id:
             return {}
 
-        event_id = log_hook_event(conn, session_id, event_type, raw_json)
+        event_id = log_hook_event(conn, session_id, event_type, raw_json,
+                                  claude_session_id=claude_session_id,
+                                  transcript_path=transcript_path,
+                                  cwd=cwd, permission_mode=permission_mode)
         if not event_id:
             return {}
 
@@ -434,16 +457,23 @@ def log_event(event_type: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
             prompt = input_data.get('prompt', '')  # Field is 'prompt' not 'user_prompt'
             log_user_prompt(conn, event_id, prompt)
 
+            # Incrementally log messages from transcript (captures assistant responses before next prompt)
+            # This ensures responses are saved even if session is force-quit
+            if transcript_path:
+                messages = parse_transcript(transcript_path)
+                if messages:
+                    log_messages(conn, session_id, messages, deduplicate=True)
+
         elif event_type == 'Stop':
             reason = input_data.get('reason', '')
             transcript_path = input_data.get('transcript_path', '')
             log_stop_event(conn, event_id, reason, transcript_path)
 
-            # Parse and store individual messages from transcript
+            # Parse and store individual messages from transcript (dedupe with incremental logs)
             if transcript_path:
                 messages = parse_transcript(transcript_path)
                 if messages:
-                    log_messages(conn, session_id, messages)
+                    log_messages(conn, session_id, messages, deduplicate=True)
 
             close_session(conn, session_id)
 
