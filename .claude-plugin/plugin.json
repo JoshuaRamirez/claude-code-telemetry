@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "claude-code-telemetry",
+  "version": "1.0.0",
+  "description": "Comprehensive SQL Server telemetry for Claude Code sessions - tracks prompts, tool usage, timing, thinking blocks, subagents, and full conversation history",
+  "author": "joshu",
+  "repository": "https://github.com/joshu/claude-code-telemetry",
+  "license": "MIT",
+  "keywords": [
+    "telemetry",
+    "logging",
+    "sql-server",
+    "analytics",
+    "observability",
+    "hooks"
+  ],
+  "engines": {
+    "claude-code": ">=1.0.0"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_pretooluse.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_posttooluse.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_stop.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_userpromptsubmit.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_sessionstart.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_subagentstop.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_precompact.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_notification.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
