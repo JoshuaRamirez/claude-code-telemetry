@@ -2,6 +2,25 @@
 
 All notable changes to claude-code-telemetry.
 
+## [1.1.0] - 2026-01-17
+
+### Added
+- **Incremental message logging**: Messages now logged at PostToolUse and UserPromptSubmit, not just Stop
+- **Force-quit protection**: Responses saved before next prompt, minimizing data loss on force-quit
+- **Token usage tracking**: New `TokenUsage` table captures input/output/cache tokens per message
+- **Cost estimation**: Automatic cost calculation based on model pricing (Opus, Sonnet, Haiku)
+- **Git change tracking**: New `GitChanges` table captures files modified during session (at Stop)
+
+### Database Schema
+- New table: `TokenUsage` (UsageId, SessionId, MessageUuid, Model, InputTokens, OutputTokens, CacheCreationTokens, CacheReadTokens, ServiceTier, EstimatedCostUsd)
+- New table: `GitChanges` (ChangeId, SessionId, FilePath, ChangeType, LinesAdded, LinesDeleted)
+
+### Changed
+- Messages logged incrementally at PostToolUse and UserPromptSubmit with deduplication
+- Stop handler now also captures git diff
+
+---
+
 ## [1.0.0] - 2026-01-17
 
 ### Added

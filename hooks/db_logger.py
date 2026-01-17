@@ -244,7 +244,7 @@ def get_git_info() -> tuple:
 def parse_transcript(transcript_path: str) -> list:
     """Parse JSONL transcript file into list of messages.
 
-    Captures text content and thinking blocks from assistant messages.
+    Captures text content, thinking blocks, and token usage from assistant messages.
     """
     messages = []
     try:
@@ -269,12 +269,14 @@ def parse_transcript(transcript_path: str) -> list:
                             'content': content,
                             'model': None,
                             'timestamp': obj.get('timestamp'),
-                            'thinking_content': None
+                            'thinking_content': None,
+                            'usage': None
                         })
 
                     elif msg_type == 'assistant':
                         # Extract text and thinking from content array
-                        content_blocks = obj.get('message', {}).get('content', [])
+                        msg_data = obj.get('message', {})
+                        content_blocks = msg_data.get('content', [])
                         text_parts = []
                         thinking_parts = []
 
@@ -285,15 +287,28 @@ def parse_transcript(transcript_path: str) -> list:
                                 elif block.get('type') == 'thinking':
                                     thinking_parts.append(block.get('thinking', ''))
 
-                        if text_parts or thinking_parts:
+                        # Extract usage data
+                        usage = msg_data.get('usage', {})
+                        usage_data = None
+                        if usage:
+                            usage_data = {
+                                'input_tokens': usage.get('input_tokens'),
+                                'output_tokens': usage.get('output_tokens'),
+                                'cache_creation_tokens': usage.get('cache_creation_input_tokens'),
+                                'cache_read_tokens': usage.get('cache_read_input_tokens'),
+                                'service_tier': usage.get('service_tier')
+                            }
+
+                        if text_parts or thinking_parts or usage_data:
                             messages.append({
                                 'uuid': obj.get('uuid'),
                                 'parent_uuid': obj.get('parentUuid'),
                                 'role': 'assistant',
                                 'content': '\n'.join(text_parts) if text_parts else None,
-                                'model': obj.get('message', {}).get('model'),
+                                'model': msg_data.get('model'),
                                 'timestamp': obj.get('timestamp'),
-                                'thinking_content': '\n'.join(thinking_parts) if thinking_parts else None
+                                'thinking_content': '\n'.join(thinking_parts) if thinking_parts else None,
+                                'usage': usage_data
                             })
                 except json.JSONDecodeError:
                     continue
@@ -301,6 +316,105 @@ def parse_transcript(transcript_path: str) -> list:
         print(f"Error parsing transcript: {e}", file=sys.stderr)
 
     return messages
+
+
+# Model pricing (USD per million tokens) - updated Jan 2026
+MODEL_PRICING = {
+    'claude-opus-4-5-20251101': {'input': 15.0, 'output': 75.0},
+    'claude-sonnet-4-20250514': {'input': 3.0, 'output': 15.0},
+    'claude-haiku-3-5-20241022': {'input': 0.80, 'output': 4.0},
+    # Fallback for unknown models
+    'default': {'input': 3.0, 'output': 15.0}
+}
+
+
+def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Calculate estimated cost in USD for token usage."""
+    pricing = MODEL_PRICING.get(model, MODEL_PRICING['default'])
+    input_cost = (input_tokens or 0) / 1_000_000 * pricing['input']
+    output_cost = (output_tokens or 0) / 1_000_000 * pricing['output']
+    return input_cost + output_cost
+
+
+def log_token_usage(conn: pyodbc.Connection, session_id: str, messages: list):
+    """Insert token usage records for messages with usage data."""
+    cursor = conn.cursor()
+    for msg in messages:
+        usage = msg.get('usage')
+        if not usage:
+            continue
+
+        msg_uuid = msg.get('uuid')
+        model = msg.get('model')
+
+        # Check if already logged
+        if msg_uuid:
+            cursor.execute("SELECT 1 FROM TokenUsage WHERE MessageUuid = ?", (msg_uuid,))
+            if cursor.fetchone():
+                continue
+
+        # Calculate cost
+        cost = calculate_cost(
+            model,
+            usage.get('input_tokens'),
+            usage.get('output_tokens')
+        )
+
+        cursor.execute("""
+            INSERT INTO TokenUsage (SessionId, MessageUuid, Model, InputTokens, OutputTokens,
+                                    CacheCreationTokens, CacheReadTokens, ServiceTier, EstimatedCostUsd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            session_id,
+            msg_uuid,
+            model,
+            usage.get('input_tokens'),
+            usage.get('output_tokens'),
+            usage.get('cache_creation_tokens'),
+            usage.get('cache_read_tokens'),
+            usage.get('service_tier'),
+            cost
+        ))
+    conn.commit()
+
+
+def capture_git_changes(conn: pyodbc.Connection, session_id: str):
+    """Capture git diff for the session."""
+    try:
+        # Get list of changed files with stats
+        result = subprocess.run(
+            ['git', 'diff', '--numstat', 'HEAD'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return
+
+        cursor = conn.cursor()
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) >= 3:
+                added = int(parts[0]) if parts[0] != '-' else 0
+                deleted = int(parts[1]) if parts[1] != '-' else 0
+                filepath = parts[2]
+
+                # Determine change type
+                if added > 0 and deleted == 0:
+                    change_type = 'added'
+                elif deleted > 0 and added == 0:
+                    change_type = 'deleted'
+                else:
+                    change_type = 'modified'
+
+                cursor.execute("""
+                    INSERT INTO GitChanges (SessionId, FilePath, ChangeType, LinesAdded, LinesDeleted)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (session_id, filepath, change_type, added, deleted))
+
+        conn.commit()
+    except Exception as e:
+        print(f"Git diff capture failed: {e}", file=sys.stderr)
 
 
 def log_messages(conn: pyodbc.Connection, session_id: str, messages: list, deduplicate: bool = False):
@@ -453,16 +567,24 @@ def log_event(event_type: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
             # This queries the DB for StartedAt and calculates duration
             update_tool_invocation(conn, tool_use_id, tool_result, completed_at)
 
+            # Incrementally log messages and tokens after each tool (more frequent saves)
+            if transcript_path:
+                messages = parse_transcript(transcript_path)
+                if messages:
+                    log_messages(conn, session_id, messages, deduplicate=True)
+                    log_token_usage(conn, session_id, messages)
+
         elif event_type == 'UserPromptSubmit':
             prompt = input_data.get('prompt', '')  # Field is 'prompt' not 'user_prompt'
             log_user_prompt(conn, event_id, prompt)
 
-            # Incrementally log messages from transcript (captures assistant responses before next prompt)
+            # Incrementally log messages and tokens from transcript
             # This ensures responses are saved even if session is force-quit
             if transcript_path:
                 messages = parse_transcript(transcript_path)
                 if messages:
                     log_messages(conn, session_id, messages, deduplicate=True)
+                    log_token_usage(conn, session_id, messages)
 
         elif event_type == 'Stop':
             reason = input_data.get('reason', '')
@@ -474,6 +596,10 @@ def log_event(event_type: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
                 messages = parse_transcript(transcript_path)
                 if messages:
                     log_messages(conn, session_id, messages, deduplicate=True)
+                    log_token_usage(conn, session_id, messages)
+
+            # Capture git changes made during session
+            capture_git_changes(conn, session_id)
 
             close_session(conn, session_id)
 

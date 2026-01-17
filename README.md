@@ -13,7 +13,11 @@ Comprehensive SQL Server telemetry for Claude Code sessions. Track every interac
 | Subagent completions | SubagentStop | `SubagentEvents` |
 | Context summarization | PreCompact | `CompactEvents` |
 | System notifications | Notification | `NotificationEvents` |
-| Full conversations | Stop | `Messages` (including ThinkingContent) |
+| Full conversations | PostToolUse, UserPromptSubmit, Stop | `Messages` (incremental + final) |
+| Thinking blocks | PostToolUse, UserPromptSubmit, Stop | `Messages.ThinkingContent` |
+| Token usage | PostToolUse, UserPromptSubmit, Stop | `TokenUsage` |
+| Cost estimates | PostToolUse, UserPromptSubmit, Stop | `TokenUsage.EstimatedCostUsd` |
+| Git file changes | Stop | `GitChanges` |
 | Raw hook payloads | All | `HookEvents.RawJson` |
 | Working directory | All | `HookEvents.Cwd` |
 | Permission mode | All | `HookEvents.PermissionMode` |
