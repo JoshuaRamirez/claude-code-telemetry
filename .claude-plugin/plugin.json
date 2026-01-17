@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Comprehensive SQL Server telemetry for Claude Code sessions - tracks prompts, tool usage, timing, thinking blocks, subagents, and full conversation history",
   "author": "joshu",
-  "repository": "https://github.com/joshu/claude-code-telemetry",
+  "repository": "https://github.com/JoshuaRamirez/claude-code-telemetry",
   "license": "MIT",
   "keywords": [
     "telemetry",
