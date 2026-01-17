@@ -15,6 +15,10 @@ Comprehensive SQL Server telemetry for Claude Code sessions. Track every interac
 | System notifications | Notification | `NotificationEvents` |
 | Full conversations | Stop | `Messages` (including ThinkingContent) |
 | Raw hook payloads | All | `HookEvents.RawJson` |
+| Working directory | All | `HookEvents.Cwd` |
+| Permission mode | All | `HookEvents.PermissionMode` |
+| Claude session ID | All | `HookEvents.ClaudeSessionId` |
+| Transcript path | All | `HookEvents.TranscriptPath` |
 
 ## Requirements
 
@@ -155,6 +159,24 @@ Claude Code Session
 - **Thinking Capture**: Extended thinking blocks stored separately
 - **Git Context**: Branch and commit captured at session start
 - **Fail-Safe**: Errors logged to stderr, never blocks Claude operations
+
+## Development
+
+After making changes to the repo, sync to your active hooks:
+
+```powershell
+.\scripts\sync.ps1
+```
+
+Changes take effect immediately - no restart needed.
+
+### Migrations
+
+If upgrading from an older version, run any new migration scripts:
+
+```bash
+sqlcmd -S localhost -E -i migrations/002_add_hookevents_columns.sql
+```
 
 ## License
 
