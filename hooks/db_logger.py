@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
-"""Database logger for Claude Code hook events.
+"""Database logger for Claude Code hook events - v2.
 
 Logs all hook events to SQL Server ClaudeConversations database.
+
+v2 fixes:
+- Session lookup via DB (ClaudeSessionId) instead of temp files
+- Incremental transcript parsing with position tracking
+- Transaction boundaries for multi-INSERT operations
+- Tool correlation race condition fix
+- JSON storage for tool inputs (replaces EAV)
+- TriggerEventId linking messages to events
+- Incremental git capture on Write/Edit tools
 """
 
 import json
@@ -10,7 +19,7 @@ import sys
 import subprocess
 import pyodbc
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 
 # Database connection string
 CONNECTION_STRING = (
@@ -34,39 +43,39 @@ def get_or_create_session(conn: pyodbc.Connection, working_dir: str = None,
                           project_name: str = None, claude_session_id: str = None) -> Optional[str]:
     """Get existing session or create new one. Returns SessionId as string.
 
+    v2: Looks up session directly in database by ClaudeSessionId.
+    Eliminates temp file dependency, survives reboots, handles concurrent sessions.
+
     Args:
         conn: Database connection
         working_dir: Working directory for session
         project_name: Project name
         claude_session_id: Claude's session_id from hook payload for concurrent safety
     """
-    from session_manager import get_session_id, set_session_id, clear_session_id
-
-    session_id = get_session_id(claude_session_id)
-    if session_id:
-        # Validate session still exists in DB (may have been truncated)
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM Sessions WHERE SessionId = ?", (session_id,))
-        if cursor.fetchone():
-            return session_id
-        # Stale session file - clear it
-        clear_session_id(claude_session_id)
-
-    # Create new session
     cursor = conn.cursor()
+
+    # First: Try to find existing session by ClaudeSessionId in DB
+    if claude_session_id:
+        cursor.execute("""
+            SELECT SessionId FROM Sessions
+            WHERE ClaudeSessionId = ? AND EndedAt IS NULL
+        """, (claude_session_id,))
+        row = cursor.fetchone()
+        if row:
+            return str(row[0])
+
+    # Second: Create new session with ClaudeSessionId
     cursor.execute("""
-        INSERT INTO Sessions (WorkingDirectory, ProjectName)
+        INSERT INTO Sessions (WorkingDirectory, ProjectName, ClaudeSessionId)
         OUTPUT INSERTED.SessionId
-        VALUES (?, ?)
-    """, (working_dir or os.getcwd(), project_name))
+        VALUES (?, ?, ?)
+    """, (working_dir or os.getcwd(), project_name, claude_session_id))
 
     row = cursor.fetchone()
     conn.commit()
 
     if row:
-        session_id = str(row[0])
-        set_session_id(session_id, claude_session_id)
-        return session_id
+        return str(row[0])
     return None
 
 
@@ -91,13 +100,15 @@ def log_tool_invocation(conn: pyodbc.Connection, event_id: int, tool_name: str,
                         block_reason: str = None, tool_result: str = None,
                         tool_use_id: str = None, started_at: datetime = None,
                         completed_at: datetime = None, duration_ms: int = None) -> Optional[int]:
-    """Insert tool invocation and parameters. Returns InvocationId.
+    """Insert tool invocation with JSON parameters. Returns InvocationId.
+
+    v2: Stores tool_input as JSON in ToolInputJson column instead of EAV rows.
 
     Args:
         conn: Database connection
         event_id: Parent event ID
         tool_name: Name of the tool
-        tool_input: Tool input parameters
+        tool_input: Tool input parameters (stored as JSON)
         was_blocked: Whether tool was blocked
         block_reason: Reason for blocking
         tool_result: Tool execution result (PostToolUse)
@@ -108,32 +119,31 @@ def log_tool_invocation(conn: pyodbc.Connection, event_id: int, tool_name: str,
     """
     cursor = conn.cursor()
 
-    # Insert invocation with timing fields
-    cursor.execute("""
-        INSERT INTO ToolInvocations (EventId, ToolName, WasBlocked, BlockReason, ToolResult,
-                                     ToolUseId, StartedAt, CompletedAt, DurationMs)
-        OUTPUT INSERTED.InvocationId
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (event_id, tool_name, was_blocked, block_reason, tool_result,
-          tool_use_id, started_at, completed_at, duration_ms))
+    # Convert tool_input dict to JSON string
+    tool_input_json = json.dumps(tool_input) if tool_input else None
 
-    row = cursor.fetchone()
-    if not row:
-        conn.commit()
-        return None
+    try:
+        cursor.execute("BEGIN TRANSACTION")
 
-    invocation_id = row[0]
-
-    # Insert parameters
-    for param_name, param_value in tool_input.items():
-        value_str = param_value if isinstance(param_value, str) else json.dumps(param_value)
+        # Insert invocation with JSON parameter storage
         cursor.execute("""
-            INSERT INTO ToolParameters (InvocationId, ParamName, ParamValue)
-            VALUES (?, ?, ?)
-        """, (invocation_id, param_name, value_str))
+            INSERT INTO ToolInvocations (EventId, ToolName, WasBlocked, BlockReason, ToolResult,
+                                         ToolUseId, StartedAt, CompletedAt, DurationMs, ToolInputJson)
+            OUTPUT INSERTED.InvocationId
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (event_id, tool_name, was_blocked, block_reason, tool_result,
+              tool_use_id, started_at, completed_at, duration_ms, tool_input_json))
 
-    conn.commit()
-    return invocation_id
+        row = cursor.fetchone()
+        invocation_id = row[0] if row else None
+
+        cursor.execute("COMMIT")
+        return invocation_id
+
+    except Exception as e:
+        cursor.execute("ROLLBACK")
+        print(f"Tool invocation insert failed: {e}", file=sys.stderr)
+        return None
 
 
 def log_user_prompt(conn: pyodbc.Connection, event_id: int, prompt_text: str) -> Optional[int]:
@@ -150,14 +160,17 @@ def log_user_prompt(conn: pyodbc.Connection, event_id: int, prompt_text: str) ->
     return row[0] if row else None
 
 
-def log_stop_event(conn: pyodbc.Connection, event_id: int, reason: str, transcript_path: str = None) -> Optional[int]:
-    """Insert stop event. Returns StopId."""
+def log_stop_event(conn: pyodbc.Connection, event_id: int, reason: str) -> Optional[int]:
+    """Insert stop event. Returns StopId.
+
+    v2: TranscriptPath removed (redundant with HookEvents).
+    """
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO StopEvents (EventId, Reason, TranscriptPath)
+        INSERT INTO StopEvents (EventId, Reason)
         OUTPUT INSERTED.StopId
-        VALUES (?, ?, ?)
-    """, (event_id, reason, transcript_path))
+        VALUES (?, ?)
+    """, (event_id, reason))
 
     row = cursor.fetchone()
     conn.commit()
@@ -222,7 +235,7 @@ def update_session_metadata(conn: pyodbc.Connection, session_id: str,
     conn.commit()
 
 
-def get_git_info() -> tuple:
+def get_git_info() -> Tuple[Optional[str], Optional[str]]:
     """Get current git branch and commit. Returns (branch, commit) or (None, None)."""
     try:
         branch = subprocess.run(
@@ -241,10 +254,121 @@ def get_git_info() -> tuple:
         return None, None
 
 
-def parse_transcript(transcript_path: str) -> list:
-    """Parse JSONL transcript file into list of messages.
+def parse_transcript_incremental(conn: pyodbc.Connection, session_id: str,
+                                  transcript_path: str) -> List[Dict[str, Any]]:
+    """Parse only new lines from transcript since last position.
 
-    Captures text content, thinking blocks, and token usage from assistant messages.
+    v2: Tracks file position in Sessions.LastTranscriptPosition.
+    Eliminates O(n²) re-parsing - now O(n) over session lifetime.
+
+    Args:
+        conn: Database connection
+        session_id: Session ID for position tracking
+        transcript_path: Path to JSONL transcript file
+
+    Returns:
+        List of newly parsed message dicts
+    """
+    cursor = conn.cursor()
+
+    # Get last position from DB
+    cursor.execute("SELECT LastTranscriptPosition FROM Sessions WHERE SessionId = ?", (session_id,))
+    row = cursor.fetchone()
+    last_position = row[0] if row and row[0] else 0
+
+    messages = []
+    try:
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            f.seek(last_position)
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    msg = _parse_transcript_line(obj)
+                    if msg:
+                        messages.append(msg)
+                except json.JSONDecodeError:
+                    continue
+            new_position = f.tell()
+
+        # Update position in DB
+        cursor.execute("""
+            UPDATE Sessions SET LastTranscriptPosition = ?
+            WHERE SessionId = ?
+        """, (new_position, session_id))
+        conn.commit()
+
+    except Exception as e:
+        print(f"Error parsing transcript: {e}", file=sys.stderr)
+
+    return messages
+
+
+def _parse_transcript_line(obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Parse a single transcript line into a message dict."""
+    msg_type = obj.get('type')
+
+    if msg_type == 'user':
+        content = obj.get('message', {}).get('content', '')
+        if isinstance(content, list):
+            content = json.dumps(content)
+        return {
+            'uuid': obj.get('uuid'),
+            'parent_uuid': obj.get('parentUuid'),
+            'role': 'user',
+            'content': content,
+            'model': None,
+            'timestamp': obj.get('timestamp'),
+            'thinking_content': None,
+            'usage': None
+        }
+
+    elif msg_type == 'assistant':
+        msg_data = obj.get('message', {})
+        content_blocks = msg_data.get('content', [])
+        text_parts = []
+        thinking_parts = []
+
+        for block in content_blocks:
+            if isinstance(block, dict):
+                if block.get('type') == 'text':
+                    text_parts.append(block.get('text', ''))
+                elif block.get('type') == 'thinking':
+                    thinking_parts.append(block.get('thinking', ''))
+
+        usage = msg_data.get('usage', {})
+        usage_data = None
+        if usage:
+            usage_data = {
+                'input_tokens': usage.get('input_tokens'),
+                'output_tokens': usage.get('output_tokens'),
+                'cache_creation_tokens': usage.get('cache_creation_input_tokens'),
+                'cache_read_tokens': usage.get('cache_read_input_tokens'),
+                'service_tier': usage.get('service_tier')
+            }
+
+        if text_parts or thinking_parts or usage_data:
+            return {
+                'uuid': obj.get('uuid'),
+                'parent_uuid': obj.get('parentUuid'),
+                'role': 'assistant',
+                'content': '\n'.join(text_parts) if text_parts else None,
+                'model': msg_data.get('model'),
+                'timestamp': obj.get('timestamp'),
+                'thinking_content': '\n'.join(thinking_parts) if thinking_parts else None,
+                'usage': usage_data
+            }
+
+    return None
+
+
+def parse_transcript(transcript_path: str) -> List[Dict[str, Any]]:
+    """Parse full JSONL transcript file into list of messages.
+
+    Legacy function - use parse_transcript_incremental for production.
+    Kept for Stop event final capture.
     """
     messages = []
     try:
@@ -255,61 +379,9 @@ def parse_transcript(transcript_path: str) -> list:
                     continue
                 try:
                     obj = json.loads(line)
-                    msg_type = obj.get('type')
-
-                    if msg_type == 'user':
-                        content = obj.get('message', {}).get('content', '')
-                        # Content can be a string or list (tool results) - convert to string
-                        if isinstance(content, list):
-                            content = json.dumps(content)
-                        messages.append({
-                            'uuid': obj.get('uuid'),
-                            'parent_uuid': obj.get('parentUuid'),
-                            'role': 'user',
-                            'content': content,
-                            'model': None,
-                            'timestamp': obj.get('timestamp'),
-                            'thinking_content': None,
-                            'usage': None
-                        })
-
-                    elif msg_type == 'assistant':
-                        # Extract text and thinking from content array
-                        msg_data = obj.get('message', {})
-                        content_blocks = msg_data.get('content', [])
-                        text_parts = []
-                        thinking_parts = []
-
-                        for block in content_blocks:
-                            if isinstance(block, dict):
-                                if block.get('type') == 'text':
-                                    text_parts.append(block.get('text', ''))
-                                elif block.get('type') == 'thinking':
-                                    thinking_parts.append(block.get('thinking', ''))
-
-                        # Extract usage data
-                        usage = msg_data.get('usage', {})
-                        usage_data = None
-                        if usage:
-                            usage_data = {
-                                'input_tokens': usage.get('input_tokens'),
-                                'output_tokens': usage.get('output_tokens'),
-                                'cache_creation_tokens': usage.get('cache_creation_input_tokens'),
-                                'cache_read_tokens': usage.get('cache_read_input_tokens'),
-                                'service_tier': usage.get('service_tier')
-                            }
-
-                        if text_parts or thinking_parts or usage_data:
-                            messages.append({
-                                'uuid': obj.get('uuid'),
-                                'parent_uuid': obj.get('parentUuid'),
-                                'role': 'assistant',
-                                'content': '\n'.join(text_parts) if text_parts else None,
-                                'model': msg_data.get('model'),
-                                'timestamp': obj.get('timestamp'),
-                                'thinking_content': '\n'.join(thinking_parts) if thinking_parts else None,
-                                'usage': usage_data
-                            })
+                    msg = _parse_transcript_line(obj)
+                    if msg:
+                        messages.append(msg)
                 except json.JSONDecodeError:
                     continue
     except Exception as e:
@@ -323,7 +395,6 @@ MODEL_PRICING = {
     'claude-opus-4-5-20251101': {'input': 15.0, 'output': 75.0},
     'claude-sonnet-4-20250514': {'input': 3.0, 'output': 15.0},
     'claude-haiku-3-5-20241022': {'input': 0.80, 'output': 4.0},
-    # Fallback for unknown models
     'default': {'input': 3.0, 'output': 15.0}
 }
 
@@ -336,7 +407,7 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return input_cost + output_cost
 
 
-def log_token_usage(conn: pyodbc.Connection, session_id: str, messages: list):
+def log_token_usage(conn: pyodbc.Connection, session_id: str, messages: List[Dict[str, Any]]):
     """Insert token usage records for messages with usage data."""
     cursor = conn.cursor()
     for msg in messages:
@@ -353,7 +424,6 @@ def log_token_usage(conn: pyodbc.Connection, session_id: str, messages: list):
             if cursor.fetchone():
                 continue
 
-        # Calculate cost
         cost = calculate_cost(
             model,
             usage.get('input_tokens'),
@@ -381,7 +451,6 @@ def log_token_usage(conn: pyodbc.Connection, session_id: str, messages: list):
 def capture_git_changes(conn: pyodbc.Connection, session_id: str):
     """Capture git diff for the session."""
     try:
-        # Get list of changed files with stats
         result = subprocess.run(
             ['git', 'diff', '--numstat', 'HEAD'],
             capture_output=True, text=True, timeout=10
@@ -399,7 +468,6 @@ def capture_git_changes(conn: pyodbc.Connection, session_id: str):
                 deleted = int(parts[1]) if parts[1] != '-' else 0
                 filepath = parts[2]
 
-                # Determine change type
                 if added > 0 and deleted == 0:
                     change_type = 'added'
                 elif deleted > 0 and added == 0:
@@ -417,37 +485,92 @@ def capture_git_changes(conn: pyodbc.Connection, session_id: str):
         print(f"Git diff capture failed: {e}", file=sys.stderr)
 
 
-def log_messages(conn: pyodbc.Connection, session_id: str, messages: list, deduplicate: bool = False):
+def capture_git_changes_incremental(conn: pyodbc.Connection, session_id: str, filepath: str = None):
+    """Capture git changes incrementally after file operations.
+
+    v2: Called after Write/Edit tools to capture changes before potential crash.
+
+    Args:
+        conn: Database connection
+        session_id: Session ID
+        filepath: Optional specific file to check (for targeted capture)
+    """
+    try:
+        cmd = ['git', 'diff', '--numstat', 'HEAD']
+        if filepath:
+            cmd.append('--')
+            cmd.append(filepath)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return
+
+        cursor = conn.cursor()
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) >= 3:
+                added = int(parts[0]) if parts[0] != '-' else 0
+                deleted = int(parts[1]) if parts[1] != '-' else 0
+                fp = parts[2]
+
+                if added > 0 and deleted == 0:
+                    change_type = 'added'
+                elif deleted > 0 and added == 0:
+                    change_type = 'deleted'
+                else:
+                    change_type = 'modified'
+
+                # Upsert - update if exists, insert if new
+                cursor.execute("""
+                    MERGE GitChanges AS target
+                    USING (SELECT ? AS SessionId, ? AS FilePath) AS source
+                    ON target.SessionId = source.SessionId AND target.FilePath = source.FilePath
+                    WHEN MATCHED THEN
+                        UPDATE SET ChangeType = ?, LinesAdded = ?, LinesDeleted = ?, RecordedAt = GETUTCDATE()
+                    WHEN NOT MATCHED THEN
+                        INSERT (SessionId, FilePath, ChangeType, LinesAdded, LinesDeleted)
+                        VALUES (?, ?, ?, ?, ?);
+                """, (session_id, fp, change_type, added, deleted,
+                      session_id, fp, change_type, added, deleted))
+
+        conn.commit()
+    except Exception as e:
+        print(f"Incremental git capture failed: {e}", file=sys.stderr)
+
+
+def log_messages(conn: pyodbc.Connection, session_id: str, messages: List[Dict[str, Any]],
+                 deduplicate: bool = False, trigger_event_id: int = None):
     """Insert parsed messages into Messages table.
+
+    v2: Added trigger_event_id to link messages to the event that caused logging.
 
     Args:
         conn: Database connection
         session_id: Session ID
         messages: List of message dicts
         deduplicate: If True, skip messages that already exist (by MessageUuid)
+        trigger_event_id: EventId that triggered this message logging
     """
     cursor = conn.cursor()
     for msg in messages:
         msg_uuid = msg.get('uuid')
 
-        # Skip if already exists (deduplication)
         if deduplicate and msg_uuid:
             cursor.execute("SELECT 1 FROM Messages WHERE MessageUuid = ?", (msg_uuid,))
             if cursor.fetchone():
                 continue
 
-        # Convert ISO timestamp string to naive datetime (SQL Server friendly)
         ts = msg.get('timestamp')
         if ts and isinstance(ts, str):
-            # Parse ISO format: 2026-01-13T00:32:13.727Z -> naive datetime
             ts = ts.replace('Z', '').replace('T', ' ')
-            # Truncate to microseconds precision for SQL Server
             if '.' in ts:
-                ts = ts[:26]  # Keep up to 6 decimal places
+                ts = ts[:26]
 
         cursor.execute("""
-            INSERT INTO Messages (SessionId, MessageUuid, ParentUuid, Role, Content, Model, Timestamp, ThinkingContent)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO Messages (SessionId, MessageUuid, ParentUuid, Role, Content, Model, Timestamp, ThinkingContent, TriggerEventId)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
             msg_uuid,
@@ -456,7 +579,8 @@ def log_messages(conn: pyodbc.Connection, session_id: str, messages: list, dedup
             msg.get('content'),
             msg.get('model'),
             ts,
-            msg.get('thinking_content')
+            msg.get('thinking_content'),
+            trigger_event_id
         ))
     conn.commit()
 
@@ -472,7 +596,12 @@ def close_session(conn: pyodbc.Connection, session_id: str):
 
 def update_tool_invocation(conn: pyodbc.Connection, tool_use_id: str,
                             tool_result: str = None, completed_at: datetime = None) -> bool:
-    """Update existing tool invocation with result and timing. Returns True if updated."""
+    """Update existing tool invocation with result and timing.
+
+    v2: Fixed race condition - only updates if not already completed.
+
+    Returns True if updated.
+    """
     if not tool_use_id:
         return False
 
@@ -481,7 +610,9 @@ def update_tool_invocation(conn: pyodbc.Connection, tool_use_id: str,
     # Get the PreToolUse record's StartedAt
     cursor.execute("""
         SELECT StartedAt FROM ToolInvocations
-        WHERE ToolUseId = ? AND StartedAt IS NOT NULL
+        WHERE ToolUseId = ?
+          AND StartedAt IS NOT NULL
+          AND CompletedAt IS NULL
         ORDER BY InvocationId ASC
     """, (tool_use_id,))
     row = cursor.fetchone()
@@ -492,15 +623,16 @@ def update_tool_invocation(conn: pyodbc.Connection, tool_use_id: str,
     started_at = row[0]
     duration_ms = None
     if completed_at and started_at:
-        # started_at from DB is already datetime, completed_at is datetime
         delta = completed_at - started_at
         duration_ms = int(delta.total_seconds() * 1000)
 
-    # Update the existing record
+    # Update the existing record - only if not already completed
     cursor.execute("""
         UPDATE ToolInvocations
         SET ToolResult = ?, CompletedAt = ?, DurationMs = ?
-        WHERE ToolUseId = ? AND StartedAt IS NOT NULL
+        WHERE ToolUseId = ?
+          AND StartedAt IS NOT NULL
+          AND CompletedAt IS NULL
     """, (tool_result, completed_at, duration_ms, tool_use_id))
 
     conn.commit()
@@ -554,6 +686,7 @@ def log_event(event_type: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
                                 tool_use_id=tool_use_id, started_at=started_at)
 
         elif event_type == 'PostToolUse':
+            tool_name = input_data.get('tool_name')
             tool_use_id = input_data.get('tool_use_id')
             completed_at = datetime.utcnow()
 
@@ -564,51 +697,48 @@ def log_event(event_type: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
                 tool_result = tool_response_raw if isinstance(tool_response_raw, str) else json.dumps(tool_response_raw)
 
             # Update existing PreToolUse record with result and timing
-            # This queries the DB for StartedAt and calculates duration
             update_tool_invocation(conn, tool_use_id, tool_result, completed_at)
 
-            # Incrementally log messages and tokens after each tool (more frequent saves)
+            # v2: Capture git changes incrementally for Write/Edit tools
+            if tool_name in ('Write', 'Edit', 'NotebookEdit'):
+                file_path = input_data.get('tool_input', {}).get('file_path')
+                capture_git_changes_incremental(conn, session_id, file_path)
+
+            # Incrementally log messages and tokens (with position tracking)
             if transcript_path:
-                messages = parse_transcript(transcript_path)
+                messages = parse_transcript_incremental(conn, session_id, transcript_path)
                 if messages:
-                    log_messages(conn, session_id, messages, deduplicate=True)
+                    log_messages(conn, session_id, messages, deduplicate=True, trigger_event_id=event_id)
                     log_token_usage(conn, session_id, messages)
 
         elif event_type == 'UserPromptSubmit':
-            prompt = input_data.get('prompt', '')  # Field is 'prompt' not 'user_prompt'
+            prompt = input_data.get('prompt', '')
             log_user_prompt(conn, event_id, prompt)
 
-            # Incrementally log messages and tokens from transcript
-            # This ensures responses are saved even if session is force-quit
+            # Incrementally log messages and tokens
             if transcript_path:
-                messages = parse_transcript(transcript_path)
+                messages = parse_transcript_incremental(conn, session_id, transcript_path)
                 if messages:
-                    log_messages(conn, session_id, messages, deduplicate=True)
+                    log_messages(conn, session_id, messages, deduplicate=True, trigger_event_id=event_id)
                     log_token_usage(conn, session_id, messages)
 
         elif event_type == 'Stop':
             reason = input_data.get('reason', '')
-            transcript_path = input_data.get('transcript_path', '')
-            log_stop_event(conn, event_id, reason, transcript_path)
+            log_stop_event(conn, event_id, reason)
 
-            # Parse and store individual messages from transcript (dedupe with incremental logs)
+            # Final full parse to ensure nothing missed (dedupes with incremental)
             if transcript_path:
                 messages = parse_transcript(transcript_path)
                 if messages:
-                    log_messages(conn, session_id, messages, deduplicate=True)
+                    log_messages(conn, session_id, messages, deduplicate=True, trigger_event_id=event_id)
                     log_token_usage(conn, session_id, messages)
 
-            # Capture git changes made during session
+            # Capture final git changes
             capture_git_changes(conn, session_id)
 
             close_session(conn, session_id)
 
-            # Clear session for next time
-            from session_manager import clear_session_id
-            clear_session_id(claude_session_id)
-
         elif event_type == 'SessionStart':
-            # Extract model and git info, update session
             model = input_data.get('model')
             git_branch, git_commit = get_git_info()
             update_session_metadata(conn, session_id, model, git_branch, git_commit)
