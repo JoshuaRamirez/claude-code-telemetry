@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Code Productivity Report</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #fff;
+            color: #333;
+            line-height: 1.6;
+        }
+        h1 { color: #2563eb; border-bottom: 3px solid #2563eb; padding-bottom: 10px; }
+        h2 { color: #1e40af; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+        table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background: #f3f4f6; font-weight: 600; }
+        tr:nth-child(even) { background: #f9fafb; }
+        .summary-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .summary-box table { background: rgba(255,255,255,0.1); }
+        .summary-box th, .summary-box td { border-color: rgba(255,255,255,0.2); color: white; }
+        .summary-box th { background: rgba(255,255,255,0.1); }
+        .metric-highlight { font-size: 1.5em; font-weight: bold; color: #2563eb; }
+        .mermaid { margin: 20px 0; }
+        .insight-box {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .recommendation-box {
+            background: #d1fae5;
+            border-left: 4px solid #10b981;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        hr { border: none; border-top: 1px solid #e5e7eb; margin: 30px 0; }
+        @media print {
+            body { max-width: 100%; }
+            .mermaid { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <script>mermaid.initialize({startOnLoad:true, theme:'default'});</script>
+
+    <h1>Claude Code Productivity Report</h1>
+    <p><strong>Period:</strong> January 23-30, 2026 (7 Days)<br>
+    <strong>Generated:</strong> January 30, 2026</p>
+
+    <hr>
+
+    <h2>Executive Summary</h2>
+    <div class="summary-box">
+        <table>
+            <tr><th>Metric</th><th>Value</th></tr>
+            <tr><td>Total Prompts</td><td class="metric-highlight">1,058</td></tr>
+            <tr><td>Total Tool Calls</td><td class="metric-highlight">11,218</td></tr>
+            <tr><td>Efficiency (Tools/Prompt)</td><td class="metric-highlight">10.6</td></tr>
+            <tr><td>Active Sessions</td><td>40</td></tr>
+            <tr><td>Projects Worked</td><td>11</td></tr>
+        </table>
+    </div>
+
+    <hr>
+
+    <h2>Daily Productivity Trend</h2>
+    <table>
+        <tr><th>Day</th><th>Prompts</th><th>Tools</th><th>Efficiency</th></tr>
+        <tr><td>Jan 23</td><td>25</td><td>661</td><td>26.4</td></tr>
+        <tr><td>Jan 24</td><td>17</td><td>180</td><td>10.6</td></tr>
+        <tr><td>Jan 25</td><td>45</td><td>476</td><td>10.6</td></tr>
+        <tr><td>Jan 26</td><td>116</td><td>1,985</td><td>17.1</td></tr>
+        <tr><td>Jan 27</td><td>91</td><td>1,542</td><td>16.9</td></tr>
+        <tr><td>Jan 28</td><td>104</td><td>2,887</td><td><strong>27.8 (Peak)</strong></td></tr>
+        <tr><td>Jan 29</td><td>169</td><td>2,135</td><td>12.6</td></tr>
+        <tr><td>Jan 30</td><td>491</td><td>1,352</td><td>2.8</td></tr>
+    </table>
+
+    <div class="mermaid">
+    xychart-beta
+        title "Daily Tool Calls"
+        x-axis [Jan23, Jan24, Jan25, Jan26, Jan27, Jan28, Jan29, Jan30]
+        y-axis "Tool Calls" 0 --> 3000
+        bar [661, 180, 476, 1985, 1542, 2887, 2135, 1352]
+    </div>
+
+    <hr>
+
+    <h2>Hourly Activity Pattern (Central Time)</h2>
+    <table>
+        <tr><th>Time Block</th><th>Prompts</th><th>Tools</th><th>Activity Level</th></tr>
+        <tr><td>12-4 AM</td><td>88</td><td>1,562</td><td>Night Owl</td></tr>
+        <tr><td>5-10 AM</td><td>3</td><td>2</td><td>Sleep</td></tr>
+        <tr><td>11 AM-1 PM</td><td>555</td><td>2,056</td><td>Morning Ramp</td></tr>
+        <tr><td>2-5 PM</td><td>241</td><td>4,931</td><td><strong>Peak Hours</strong></td></tr>
+        <tr><td>6-9 PM</td><td>136</td><td>1,884</td><td>Evening Wind-down</td></tr>
+        <tr><td>10-11 PM</td><td>35</td><td>783</td><td>Late Night</td></tr>
+    </table>
+
+    <hr>
+
+    <h2>Top 10 Tools</h2>
+    <table>
+        <tr><th>Rank</th><th>Tool</th><th>Calls</th><th>Avg Duration</th></tr>
+        <tr><td>1</td><td>Read</td><td>3,262</td><td>10.7s</td></tr>
+        <tr><td>2</td><td>Bash</td><td>2,913</td><td>10.3s</td></tr>
+        <tr><td>3</td><td>Edit</td><td>1,271</td><td>4.3s</td></tr>
+        <tr><td>4</td><td>Grep</td><td>776</td><td>8.8s</td></tr>
+        <tr><td>5</td><td>Glob</td><td>741</td><td>11.5s</td></tr>
+        <tr><td>6</td><td>Write</td><td>735</td><td>5.3s</td></tr>
+        <tr><td>7</td><td>TaskUpdate</td><td>207</td><td>1.8s</td></tr>
+        <tr><td>8</td><td>Task (Agents)</td><td>162</td><td><strong>10.5 min</strong></td></tr>
+        <tr><td>9</td><td>ToolSearch</td><td>113</td><td>0.9s</td></tr>
+        <tr><td>10</td><td>TaskCreate</td><td>101</td><td>1.8s</td></tr>
+    </table>
+
+    <div class="mermaid">
+    pie title Tool Distribution
+        "Read" : 3262
+        "Bash" : 2913
+        "Edit" : 1271
+        "Grep" : 776
+        "Glob" : 741
+        "Write" : 735
+        "Other" : 1520
+    </div>
+
+    <hr>
+
+    <h2>Project Activity</h2>
+    <table>
+        <tr><th>Project</th><th>Prompts</th><th>Tools</th></tr>
+        <tr><td>BL-ETL.NET</td><td>684</td><td>4,997</td></tr>
+        <tr><td>Desktop/Threads</td><td>91</td><td>1,691</td></tr>
+        <tr><td>BL-ETL.NET/MetaSystem</td><td>43</td><td>1,176</td></tr>
+        <tr><td>Desktop/Stuff</td><td>41</td><td>973</td></tr>
+        <tr><td>BLETL Archimate</td><td>41</td><td>505</td></tr>
+        <tr><td>SystemAnimation</td><td>34</td><td>517</td></tr>
+        <tr><td>viv</td><td>17</td><td>329</td></tr>
+        <tr><td>RoslynMcpServer</td><td>30</td><td>137</td></tr>
+        <tr><td>Claude (telemetry)</td><td>6</td><td>80</td></tr>
+    </table>
+
+    <hr>
+
+    <h2>Session Archetypes</h2>
+    <table>
+        <tr><th>Type</th><th>Sessions</th><th>Avg Tools</th><th>Description</th></tr>
+        <tr><td><strong>Balanced</strong></td><td>19</td><td>431</td><td>Mix of read/edit/run</td></tr>
+        <tr><td>Scripter</td><td>8</td><td>217</td><td>Bash-heavy automation</td></tr>
+        <tr><td>Editor</td><td>5</td><td>135</td><td>Focused code changes</td></tr>
+        <tr><td>Explorer</td><td>3</td><td>119</td><td>Codebase investigation</td></tr>
+    </table>
+
+    <div class="mermaid">
+    pie title Session Types
+        "Balanced" : 19
+        "Scripter" : 8
+        "Editor" : 5
+        "Explorer" : 3
+    </div>
+
+    <hr>
+
+    <h2>Key Insights</h2>
+    <div class="insight-box">
+        <ol>
+            <li><strong>Peak Efficiency Day:</strong> January 28 with 27.8 tools per prompt</li>
+            <li><strong>Power Hours:</strong> 2-5 PM Central Time (4,931 tool calls)</li>
+            <li><strong>Work Style:</strong> Predominantly "Balanced" sessions mixing exploration and editing</li>
+            <li><strong>Agent Usage:</strong> Task tool averages 10.5 minutes - heavy delegation to subagents</li>
+            <li><strong>Primary Project:</strong> BL-ETL.NET with 4,997 tool calls this week</li>
+        </ol>
+    </div>
+
+    <hr>
+
+    <h2>Recommendations</h2>
+    <div class="recommendation-box">
+        <ul>
+            <li><strong>Leverage peak hours</strong> (2-5 PM) for complex tasks requiring deep focus</li>
+            <li><strong>Consider more agent delegation</strong> - sessions using Task tool show higher efficiency</li>
+            <li><strong>Morning ramp-up</strong> detected - schedule creative work after 11 AM</li>
+            <li><strong>Night owl activity</strong> present - ensure adequate rest for sustained productivity</li>
+        </ul>
+    </div>
+
+    <hr>
+    <p style="text-align: center; color: #666; font-size: 0.9em;">
+        <em>Report generated from Claude Code Telemetry v2.0</em>
+    </p>
+
+</body>
+</html>
