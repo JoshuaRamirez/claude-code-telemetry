@@ -7,9 +7,9 @@ Layered checks (short-circuits on first failure):
   3. Schema tables present
 """
 
-import sys
 import os
-from typing import Tuple, Optional
+import sys
+from typing import Optional
 
 # Add hooks directory to path for db_logger import
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,7 +26,7 @@ REQUIRED_TABLES = [
 ]
 
 
-def check_health() -> Tuple[bool, Optional[str]]:
+def check_health() -> tuple[bool, Optional[str]]:
     """Run layered prerequisite checks.
 
     Returns:

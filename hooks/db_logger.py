@@ -15,11 +15,12 @@ v2 fixes:
 
 import json
 import os
-import sys
 import subprocess
-import pyodbc
+import sys
 from datetime import datetime
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Any, Optional
+
+import pyodbc
 
 # Database connection string (override via CLAUDE_TELEMETRY_CONNECTION env var)
 CONNECTION_STRING = os.environ.get(
@@ -97,7 +98,7 @@ def log_hook_event(conn: pyodbc.Connection, session_id: str, event_name: str, ra
 
 
 def log_tool_invocation(conn: pyodbc.Connection, event_id: int, tool_name: str,
-                        tool_input: Dict[str, Any], was_blocked: bool = False,
+                        tool_input: dict[str, Any], was_blocked: bool = False,
                         block_reason: str = None, tool_result: str = None,
                         tool_use_id: str = None, started_at: datetime = None,
                         completed_at: datetime = None, duration_ms: int = None) -> Optional[int]:
@@ -236,7 +237,7 @@ def update_session_metadata(conn: pyodbc.Connection, session_id: str,
     conn.commit()
 
 
-def get_git_info() -> Tuple[Optional[str], Optional[str]]:
+def get_git_info() -> tuple[Optional[str], Optional[str]]:
     """Get current git branch and commit. Returns (branch, commit) or (None, None)."""
     try:
         branch = subprocess.run(
@@ -256,7 +257,7 @@ def get_git_info() -> Tuple[Optional[str], Optional[str]]:
 
 
 def parse_transcript_incremental(conn: pyodbc.Connection, session_id: str,
-                                  transcript_path: str) -> List[Dict[str, Any]]:
+                                  transcript_path: str) -> list[dict[str, Any]]:
     """Parse only new lines from transcript since last position.
 
     v2: Tracks file position in Sessions.LastTranscriptPosition.
@@ -279,7 +280,7 @@ def parse_transcript_incremental(conn: pyodbc.Connection, session_id: str,
 
     messages = []
     try:
-        with open(transcript_path, 'r', encoding='utf-8') as f:
+        with open(transcript_path, encoding='utf-8') as f:
             f.seek(last_position)
             for line in f:
                 line = line.strip()
@@ -307,7 +308,7 @@ def parse_transcript_incremental(conn: pyodbc.Connection, session_id: str,
     return messages
 
 
-def _parse_transcript_line(obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _parse_transcript_line(obj: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parse a single transcript line into a message dict."""
     msg_type = obj.get('type')
 
@@ -365,7 +366,7 @@ def _parse_transcript_line(obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def parse_transcript(transcript_path: str) -> List[Dict[str, Any]]:
+def parse_transcript(transcript_path: str) -> list[dict[str, Any]]:
     """Parse full JSONL transcript file into list of messages.
 
     Legacy function - use parse_transcript_incremental for production.
@@ -373,7 +374,7 @@ def parse_transcript(transcript_path: str) -> List[Dict[str, Any]]:
     """
     messages = []
     try:
-        with open(transcript_path, 'r', encoding='utf-8') as f:
+        with open(transcript_path, encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -408,7 +409,7 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return input_cost + output_cost
 
 
-def log_token_usage(conn: pyodbc.Connection, session_id: str, messages: List[Dict[str, Any]]):
+def log_token_usage(conn: pyodbc.Connection, session_id: str, messages: list[dict[str, Any]]):
     """Insert token usage records for messages with usage data."""
     cursor = conn.cursor()
     for msg in messages:
@@ -541,7 +542,7 @@ def capture_git_changes_incremental(conn: pyodbc.Connection, session_id: str, fi
         print(f"Incremental git capture failed: {e}", file=sys.stderr)
 
 
-def log_messages(conn: pyodbc.Connection, session_id: str, messages: List[Dict[str, Any]],
+def log_messages(conn: pyodbc.Connection, session_id: str, messages: list[dict[str, Any]],
                  deduplicate: bool = False, trigger_event_id: int = None):
     """Insert parsed messages into Messages table.
 
@@ -640,7 +641,7 @@ def update_tool_invocation(conn: pyodbc.Connection, tool_use_id: str,
     return cursor.rowcount > 0
 
 
-def log_event(event_type: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
+def log_event(event_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
     """Main entry point for logging any hook event.
 
     Args:

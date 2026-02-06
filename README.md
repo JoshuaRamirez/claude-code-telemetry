@@ -26,7 +26,7 @@ Comprehensive SQL Server telemetry for Claude Code sessions. Track every interac
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.9+
 - SQL Server (local or remote)
 - ODBC Driver 17 for SQL Server
 - pyodbc

@@ -1,8 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "claude-code-telemetry"
-version = "2.0.1"
+version = "2.0.2"
 description = "Claude Code hooks plugin for SQL Server telemetry"
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.9"
+authors = [{name = "Joshua Ramirez", email = "joshua.ramirez@me.com"}]
+keywords = ["claude-code", "telemetry", "sql-server", "hooks", "observability"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Logging",
+]
+dependencies = ["pyodbc>=4.0.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0", "pytest-cov>=7.0", "ruff>=0.9.0"]
+
+[project.urls]
+Homepage = "https://github.com/JoshuaRamirez/claude-code-telemetry"
+Repository = "https://github.com/JoshuaRamirez/claude-code-telemetry"
+Issues = "https://github.com/JoshuaRamirez/claude-code-telemetry/issues"
+Changelog = "https://github.com/JoshuaRamirez/claude-code-telemetry/blob/master/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -22,3 +53,14 @@ exclude_lines = [
     "if __name__",
     "pragma: no cover",
 ]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B", "UP"]

@@ -4,10 +4,10 @@ Target: hooks/db_logger.py:310-365
 """
 
 import json
+
 import pytest
 
 from hooks.db_logger import _parse_transcript_line
-
 
 pytestmark = pytest.mark.unit
 

@@ -10,10 +10,10 @@ db_sessionstart.py adds health check gating.
 
 import json
 import sys
-import pytest
-from unittest.mock import patch, MagicMock
 from io import StringIO
+from unittest.mock import patch
 
+import pytest
 
 pytestmark = pytest.mark.unit
 
@@ -89,7 +89,7 @@ class TestSessionStartHook:
         with patch.object(sys, 'stdin', mock_stdin), \
              patch('hooks.db_sessionstart.check_health', return_value=(True, None)), \
              patch('hooks.db_sessionstart.log_event', return_value={}) as mock_log, \
-             patch('sys.stdout', new_callable=StringIO) as mock_stdout:
+             patch('sys.stdout', new_callable=StringIO):
 
             with pytest.raises(SystemExit) as exc_info:
                 db_sessionstart.main()

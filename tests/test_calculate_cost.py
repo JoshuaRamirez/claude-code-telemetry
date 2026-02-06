@@ -5,8 +5,7 @@ Target: hooks/db_logger.py:403-408
 
 import pytest
 
-from hooks.db_logger import calculate_cost, MODEL_PRICING
-
+from hooks.db_logger import MODEL_PRICING, calculate_cost
 
 pytestmark = pytest.mark.unit
 

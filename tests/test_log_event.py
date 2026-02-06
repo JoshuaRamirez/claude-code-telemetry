@@ -5,12 +5,11 @@ Target: hooks/db_logger.py:643-775
 Strategy: Patch all sub-functions at module level, verify dispatch logic.
 """
 
+from unittest.mock import ANY, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, ANY
-from datetime import datetime
 
 from hooks.db_logger import log_event
-
 
 pytestmark = pytest.mark.unit
 
@@ -22,7 +21,6 @@ _P = 'hooks.db_logger.'
 @pytest.fixture
 def mock_all():
     """Patch all sub-functions used by log_event. Returns dict of mocks."""
-    patches = {}
     targets = [
         'get_connection',
         'get_or_create_session',

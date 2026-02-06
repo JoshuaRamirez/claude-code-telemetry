@@ -15,7 +15,7 @@ Write-Host "====================================" -ForegroundColor Cyan
 Write-Host "`nChecking Python..." -ForegroundColor Yellow
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {
-    Write-Error "Python not found. Please install Python 3.8+ and ensure it's in PATH."
+    Write-Error "Python not found. Please install Python 3.9+ and ensure it's in PATH."
     exit 1
 }
 $pythonVersion = python --version
@@ -44,21 +44,38 @@ if (-not $driver) {
 }
 Write-Host "  Found: $($driver.Name)" -ForegroundColor Green
 
-# Create database
+# Run all migrations
 if (-not $SkipDatabase) {
-    Write-Host "`nCreating database schema..." -ForegroundColor Yellow
-    $scriptPath = Join-Path $PSScriptRoot "..\migrations\001_initial_schema.sql"
+    Write-Host "`nRunning database migrations..." -ForegroundColor Yellow
+    $migrationsDir = Join-Path $PSScriptRoot "..\migrations"
+    $migrations = Get-ChildItem -Path $migrationsDir -Filter "*.sql" | Sort-Object Name
 
-    try {
-        sqlcmd -S $Server -E -i $scriptPath -b
-        if ($LASTEXITCODE -ne 0) {
-            throw "sqlcmd failed"
-        }
-        Write-Host "  Database schema created" -ForegroundColor Green
+    if ($migrations.Count -eq 0) {
+        Write-Warning "No migration files found in $migrationsDir"
     }
-    catch {
-        Write-Warning "Could not create database automatically."
-        Write-Host "  Please run migrations/001_initial_schema.sql manually in SSMS"
+    else {
+        $failed = $false
+        foreach ($migration in $migrations) {
+            Write-Host "  Running $($migration.Name)..." -NoNewline
+            try {
+                sqlcmd -S $Server -E -i $migration.FullName -b
+                if ($LASTEXITCODE -ne 0) {
+                    throw "sqlcmd failed"
+                }
+                Write-Host " OK" -ForegroundColor Green
+            }
+            catch {
+                Write-Host " FAILED" -ForegroundColor Red
+                $failed = $true
+                break
+            }
+        }
+        if ($failed) {
+            Write-Warning "Migration failed. Please run the remaining migrations manually in SSMS."
+        }
+        else {
+            Write-Host "  All $($migrations.Count) migrations applied" -ForegroundColor Green
+        }
     }
 }
 

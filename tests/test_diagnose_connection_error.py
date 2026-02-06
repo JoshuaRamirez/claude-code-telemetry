@@ -7,7 +7,6 @@ import pytest
 
 from hooks.health_check import _diagnose_connection_error
 
-
 pytestmark = pytest.mark.unit
 
 

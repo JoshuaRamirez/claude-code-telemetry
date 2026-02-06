@@ -13,7 +13,7 @@
       "name": "claude-code-telemetry",
       "source": ".",
       "description": "Comprehensive SQL Server telemetry - tracks prompts, tool usage, timing, thinking blocks, and conversation history",
-      "version": "2.0.0",
+      "version": "2.0.2",
       "category": "observability",
       "tags": ["telemetry", "logging", "sql-server", "analytics"]
     }

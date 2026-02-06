@@ -6,14 +6,14 @@ returns a systemMessage with actionable guidance instead of silently failing.
 """
 
 import json
-import sys
 import os
+import sys
 
 # Add hooks directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from health_check import check_health
 from db_logger import log_event
+from health_check import check_health
 
 
 def main():

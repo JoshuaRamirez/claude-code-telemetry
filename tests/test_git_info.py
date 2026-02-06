@@ -3,12 +3,12 @@
 Target: hooks/db_logger.py:239-255
 """
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from hooks.db_logger import get_git_info
 from tests.conftest import make_subprocess_result
-
 
 pytestmark = pytest.mark.unit
 

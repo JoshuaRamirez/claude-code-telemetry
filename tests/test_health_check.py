@@ -7,12 +7,12 @@ locally inside the function body, so we must patch pyodbc.connect on the actual
 pyodbc module, not on hooks.health_check.
 """
 
-import pytest
+from unittest.mock import MagicMock, patch
+
 import pyodbc
-from unittest.mock import patch, MagicMock
+import pytest
 
-from hooks.health_check import check_health, _check_schema, REQUIRED_TABLES
-
+from hooks.health_check import REQUIRED_TABLES, _check_schema, check_health
 
 pytestmark = pytest.mark.unit
 

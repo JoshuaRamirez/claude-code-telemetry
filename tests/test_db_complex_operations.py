@@ -5,19 +5,18 @@ Target: hooks/db_logger.py -- parse_transcript_incremental, log_token_usage,
 """
 
 import json
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch, call
-from datetime import datetime
 
 from hooks.db_logger import (
-    parse_transcript_incremental,
-    log_token_usage,
-    log_messages,
     capture_git_changes,
     capture_git_changes_incremental,
+    log_messages,
+    log_token_usage,
+    parse_transcript_incremental,
 )
 from tests.conftest import make_subprocess_result
-
 
 pytestmark = pytest.mark.unit
 

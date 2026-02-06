@@ -5,25 +5,25 @@ All use mock_conn/mock_cursor fixtures from conftest.
 """
 
 import json
-import pytest
-from unittest.mock import MagicMock, patch, call
 from datetime import datetime
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from hooks.db_logger import (
+    close_session,
     get_connection,
     get_or_create_session,
+    log_compact_event,
     log_hook_event,
-    log_tool_invocation,
-    log_user_prompt,
+    log_notification_event,
     log_stop_event,
     log_subagent_event,
-    log_compact_event,
-    log_notification_event,
+    log_tool_invocation,
+    log_user_prompt,
     update_session_metadata,
-    close_session,
     update_tool_invocation,
 )
-
 
 pytestmark = pytest.mark.unit
 

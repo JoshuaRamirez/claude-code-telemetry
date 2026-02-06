@@ -2,6 +2,30 @@
 
 All notable changes to claude-code-telemetry.
 
+## [2.0.2] - 2026-02-06
+
+### Added
+- **Unit test suite**: 145 tests across 9 test files achieving 97% code coverage
+- pytest + pytest-cov configuration in `pyproject.toml` with 90% coverage gate
+- All tests fully mocked (no real DB, network, or file I/O required)
+- Test markers for selective test execution (`pytest -m unit`)
+- **CI/CD pipeline**: GitHub Actions with lint + test matrix (Python 3.9-3.13, Ubuntu + Windows)
+- **Release workflow**: Automatic GitHub Releases from `v*` tags with CHANGELOG extraction
+- **Ruff linter**: Static analysis with E/W/F/I/B/UP rules, line-length 120
+- **Community files**: `SECURITY.md` and `CONTRIBUTING.md`
+- **Git tags**: Annotated tags for all historical releases (v1.0.0 through v2.0.2)
+
+### Changed
+- Version synced to 2.0.2 across `pyproject.toml`, `plugin.json`, and `marketplace.json`
+- `pyproject.toml` completed with PEP 621 metadata: build-system, authors, classifiers, URLs, dependencies
+- Hook commands changed from `python` to `python3` for cross-platform compatibility
+- Install script now runs all migrations in order (not just `001_initial_schema.sql`)
+- Python version requirement updated from 3.8+ to 3.9+ across README and install script
+- Modernized type hints: `typing.Dict/List/Tuple` replaced with built-in `dict/list/tuple`
+- Import ordering cleaned up across all source and test files
+
+---
+
 ## [2.0.1] - 2026-02-06
 
 ### Added

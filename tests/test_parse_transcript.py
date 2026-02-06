@@ -3,12 +3,11 @@
 Target: hooks/db_logger.py:368-391
 """
 
-import pytest
-from unittest.mock import patch, mock_open
 import json
 
-from hooks.db_logger import parse_transcript
+import pytest
 
+from hooks.db_logger import parse_transcript
 
 pytestmark = pytest.mark.unit
 

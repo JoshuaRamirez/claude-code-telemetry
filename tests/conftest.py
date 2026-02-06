@@ -8,8 +8,9 @@ Fixture layering:
 
 import os
 import sys
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Ensure hooks/ is importable as a package
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
