@@ -21,8 +21,9 @@ import pyodbc
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
-# Database connection string
-CONNECTION_STRING = (
+# Database connection string (override via CLAUDE_TELEMETRY_CONNECTION env var)
+CONNECTION_STRING = os.environ.get(
+    'CLAUDE_TELEMETRY_CONNECTION',
     "Driver={ODBC Driver 17 for SQL Server};"
     "Server=localhost;"
     "Database=ClaudeConversations;"

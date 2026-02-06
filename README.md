@@ -65,12 +65,15 @@ Or edit `hooks/db_logger.py` directly to set your connection string.
 
 ### 4. Install Plugin
 
-```bash
-# From plugin marketplace (if published)
-/plugin marketplace add your-username/claude-code-telemetry
+**From GitHub (RedJay Marketplace):**
+```
+/plugin marketplace add JoshuaRamirez/claude-code-telemetry
+```
+Then install "claude-code-telemetry" from the RedJay marketplace in `/plugin` Discover tab.
 
-# Or install locally
-/plugin install /path/to/claude-code-telemetry
+**For local development:**
+```bash
+claude --plugin-dir C:\Source\claude-code-telemetry
 ```
 
 ## Schema

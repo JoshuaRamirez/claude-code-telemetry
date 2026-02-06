@@ -2,6 +2,34 @@
 
 All notable changes to claude-code-telemetry.
 
+## [2.0.0] - 2026-02-05
+
+### Changed
+- **Plugin manifest updated** to match Claude Code plugin spec
+  - Version bumped to 2.0.0
+  - `author` field changed from string to object format (`name` + `url`)
+  - Removed non-spec `$schema` and `engines` fields
+- **Connection string now configurable** via `CLAUDE_TELEMETRY_CONNECTION` environment variable with backward-compatible default
+
+### Added
+- **Marketplace publishing support**: New `.claude-plugin/marketplace.json` for Git-based distribution via RedJay marketplace
+- Users can now install via `/plugin marketplace add JoshuaRamirez/claude-code-telemetry`
+
+### Fixed
+- README installation section now shows correct marketplace and local dev commands
+- Connection string env var documented in README now actually works in code
+
+### Database (v2 - previously released, now documented)
+- Session lookup via DB (`ClaudeSessionId`) instead of temp files
+- Incremental transcript parsing with position tracking (`LastTranscriptPosition`)
+- Transaction boundaries for multi-INSERT operations
+- Tool correlation race condition fix (only updates uncompleted records)
+- JSON storage for tool inputs (`ToolInputJson` replaces EAV)
+- `TriggerEventId` linking messages to the event that caused logging
+- Incremental git capture on Write/Edit tools
+
+---
+
 ## [1.1.0] - 2026-01-17
 
 ### Added

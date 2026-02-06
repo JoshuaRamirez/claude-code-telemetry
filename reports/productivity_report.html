@@ -7,45 +7,61 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <style>
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-family: Calibri, 'Segoe UI', Arial, sans-serif;
             max-width: 900px;
             margin: 0 auto;
             padding: 20px;
             background: #fff;
-            color: #333;
+            color: #000;
             line-height: 1.6;
         }
-        h1 { color: #2563eb; border-bottom: 3px solid #2563eb; padding-bottom: 10px; }
-        h2 { color: #1e40af; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+        h1 { color: #1f497d; border-bottom: 3px solid #4472c4; padding-bottom: 10px; }
+        h2 { color: #1f497d; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
         table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-        th { background: #f3f4f6; font-weight: 600; }
-        tr:nth-child(even) { background: #f9fafb; }
+        th, td { border: 1px solid #7f7f7f; padding: 10px; text-align: left; }
+        th { background: #4472c4; color: #fff; font-weight: 600; }
+        tr:nth-child(even) { background: #d9e2f3; }
+
+        /* Summary box */
         .summary-box {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: #fff;
             padding: 20px;
             border-radius: 10px;
             margin: 20px 0;
+            border: 2px solid #4472c4;
         }
-        .summary-box table { background: rgba(255,255,255,0.1); }
-        .summary-box th, .summary-box td { border-color: rgba(255,255,255,0.2); color: white; }
-        .summary-box th { background: rgba(255,255,255,0.1); }
-        .metric-highlight { font-size: 1.5em; font-weight: bold; color: #2563eb; }
+        .summary-box table { background: transparent; }
+        .summary-box th, .summary-box td { border: 1px solid #7f7f7f; }
+        .summary-box th { background: #4472c4; color: #fff; }
+        .summary-box tr { background: #fff !important; }
+        .summary-box tr:nth-child(even) { background: #d9e2f3 !important; }
+        .metric-highlight { font-size: 1.5em; font-weight: bold; color: #1f497d; }
+
         .mermaid { margin: 20px 0; }
+
+        /* Insight box */
         .insight-box {
-            background: #fef3c7;
-            border-left: 4px solid #f59e0b;
+            background: #fff;
+            border-left: 4px solid #4472c4;
             padding: 15px;
             margin: 15px 0;
         }
+        .insight-box ol { margin: 0; padding-left: 20px; }
+        .insight-box li { margin-bottom: 8px; }
+        .insight-box strong { color: #1f497d; }
+
+        /* Recommendation box */
         .recommendation-box {
-            background: #d1fae5;
-            border-left: 4px solid #10b981;
+            background: #fff;
+            border-left: 4px solid #4472c4;
             padding: 15px;
             margin: 15px 0;
         }
-        hr { border: none; border-top: 1px solid #e5e7eb; margin: 30px 0; }
+        .recommendation-box ul { margin: 0; padding-left: 20px; }
+        .recommendation-box li { margin-bottom: 8px; }
+        .recommendation-box strong { color: #1f497d; }
+
+        hr { border: none; border-top: 1px solid #ddd; margin: 30px 0; }
         @media print {
             body { max-width: 100%; }
             .mermaid { page-break-inside: avoid; }
@@ -198,8 +214,8 @@
     </div>
 
     <hr>
-    <p style="text-align: center; color: #666; font-size: 0.9em;">
-        <em>Report generated from Claude Code Telemetry v2.0</em>
+    <p style="text-align: center; color: #94a3b8; font-size: 0.85em; margin-top: 48px;">
+        Report generated from Claude Code Telemetry v2.0
     </p>
 
 </body>

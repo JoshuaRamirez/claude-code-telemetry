@@ -1,9 +1,11 @@
 {
-  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
   "name": "claude-code-telemetry",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Comprehensive SQL Server telemetry for Claude Code sessions - tracks prompts, tool usage, timing, thinking blocks, subagents, and full conversation history",
-  "author": "joshu",
+  "author": {
+    "name": "Joshua Ramirez",
+    "url": "https://github.com/JoshuaRamirez"
+  },
   "repository": "https://github.com/JoshuaRamirez/claude-code-telemetry",
   "license": "MIT",
   "keywords": [
@@ -14,9 +16,6 @@
     "observability",
     "hooks"
   ],
-  "engines": {
-    "claude-code": ">=1.0.0"
-  },
   "hooks": {
     "PreToolUse": [
       {
