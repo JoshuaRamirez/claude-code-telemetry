@@ -1,0 +1,24 @@
+[project]
+name = "claude-code-telemetry"
+version = "2.0.1"
+description = "Claude Code hooks plugin for SQL Server telemetry"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: Unit tests (no real DB or network)",
+]
+addopts = "-m unit"
+
+[tool.coverage.run]
+source = ["hooks"]
+omit = ["hooks/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+exclude_lines = [
+    "if __name__",
+    "pragma: no cover",
+]
