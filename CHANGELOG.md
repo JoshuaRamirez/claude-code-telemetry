@@ -2,6 +2,17 @@
 
 All notable changes to claude-code-telemetry.
 
+## [2.0.1] - 2026-02-06
+
+### Added
+- **SessionStart health check**: Layered prerequisite validation (pyodbc, ODBC driver, SQL Server connectivity, schema tables) with actionable user-facing diagnostics via `systemMessage`
+- New `hooks/health_check.py` module with specific error diagnosis for driver, authentication, and network failures
+
+### Removed
+- **Legacy global hooks**: Removed hardcoded hook entries from `~/.claude/settings.json` that caused double-firing alongside the plugin system
+
+---
+
 ## [2.0.0] - 2026-02-05
 
 ### Changed
