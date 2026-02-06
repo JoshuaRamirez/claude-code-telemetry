@@ -20,3 +20,10 @@ Thumbs.db
 # Local config (if users create local overrides)
 *.local.py
 .env
+
+# Test coverage artifacts
+.coverage
+htmlcov/
+
+# Claude Code local config
+.claude/
