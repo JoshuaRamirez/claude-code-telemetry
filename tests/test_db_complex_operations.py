@@ -7,6 +7,7 @@ Target: hooks/db_logger.py -- parse_transcript_incremental, log_token_usage,
 import json
 from unittest.mock import patch
 
+import pyodbc
 import pytest
 
 from hooks.db_logger import (
@@ -96,6 +97,7 @@ class TestLogTokenUsage:
         mock_conn.commit.assert_called_once()
 
     def test_new_record_inserted(self, mock_conn, mock_cursor):
+        """Token usage is inserted directly (dedup handled by unique index + IntegrityError)."""
         msgs = [{
             'uuid': 'msg-1',
             'model': 'claude-sonnet-4-20250514',
@@ -107,27 +109,27 @@ class TestLogTokenUsage:
                 'service_tier': 'standard',
             }
         }]
-        # First fetchone = SELECT check (no existing), then INSERT (no OUTPUT needed)
-        mock_cursor.fetchone.return_value = None
         log_token_usage(mock_conn, '1', msgs)
-        # Should have SELECT + INSERT calls
-        assert mock_cursor.execute.call_count >= 2
+        # Direct INSERT (unique index + try/except IntegrityError handles dedup)
+        insert_calls = [c for c in mock_cursor.execute.call_args_list
+                        if 'INSERT' in str(c)]
+        assert len(insert_calls) == 1
 
-    def test_duplicate_skipped(self, mock_conn, mock_cursor):
-        """If MessageUuid already exists, skip."""
+    def test_duplicate_handled_by_integrity_error(self, mock_conn, mock_cursor):
+        """Duplicate INSERT raises IntegrityError, caught and skipped."""
+        mock_cursor.execute.side_effect = pyodbc.IntegrityError('23000', 'dup key')
         msgs = [{'uuid': 'existing-uuid', 'model': 'test',
                  'usage': {'input_tokens': 10, 'output_tokens': 5}}]
-        mock_cursor.fetchone.return_value = (1,)  # Already exists
+        # Should not raise — IntegrityError caught internally
         log_token_usage(mock_conn, '1', msgs)
-        # Only 1 execute (the SELECT check), no INSERT
-        assert mock_cursor.execute.call_count == 1
+        mock_conn.rollback.assert_called_once()  # Defensive rollback
+        mock_conn.commit.assert_called_once()
 
     def test_no_uuid_still_inserts(self, mock_conn, mock_cursor):
-        """Messages without uuid skip the dedup check but still insert."""
+        """Messages without uuid still insert (NULL excluded from unique index)."""
         msgs = [{'model': 'test',
                  'usage': {'input_tokens': 10, 'output_tokens': 5}}]
         log_token_usage(mock_conn, '1', msgs)
-        # Should INSERT without SELECT
         insert_calls = [c for c in mock_cursor.execute.call_args_list
                         if 'INSERT' in str(c)]
         assert len(insert_calls) == 1
@@ -174,21 +176,19 @@ class TestLogMessages:
         assert mock_cursor.execute.call_count == 1
         mock_conn.commit.assert_called_once()
 
-    def test_deduplicate_existing(self, mock_conn, mock_cursor):
-        """With deduplicate=True, skips if MessageUuid already exists."""
-        mock_cursor.fetchone.return_value = (1,)  # Already exists
+    def test_duplicate_handled_by_integrity_error(self, mock_conn, mock_cursor):
+        """Duplicate INSERT raises IntegrityError, caught and skipped."""
+        mock_cursor.execute.side_effect = pyodbc.IntegrityError('23000', 'dup key')
         msgs = [{'uuid': 'existing', 'role': 'user', 'content': 'dup'}]
-        log_messages(mock_conn, '1', msgs, deduplicate=True)
-        # Only SELECT check, no INSERT
-        insert_calls = [c for c in mock_cursor.execute.call_args_list
-                        if 'INSERT' in str(c)]
-        assert len(insert_calls) == 0
+        # Should not raise — IntegrityError caught internally
+        log_messages(mock_conn, '1', msgs)
+        mock_conn.rollback.assert_called_once()  # Defensive rollback
+        mock_conn.commit.assert_called_once()
 
-    def test_deduplicate_new_inserts(self, mock_conn, mock_cursor):
-        """With deduplicate=True, inserts if MessageUuid not found."""
-        mock_cursor.fetchone.return_value = None  # Not found
+    def test_dedup_always_active(self, mock_conn, mock_cursor):
+        """Dedup is always active via unique index + IntegrityError (no flag needed)."""
         msgs = [{'uuid': 'new-uuid', 'role': 'assistant', 'content': 'yes'}]
-        log_messages(mock_conn, '1', msgs, deduplicate=True)
+        log_messages(mock_conn, '1', msgs)
         insert_calls = [c for c in mock_cursor.execute.call_args_list
                         if 'INSERT' in str(c)]
         assert len(insert_calls) == 1
@@ -222,7 +222,18 @@ class TestLogMessages:
         log_messages(mock_conn, '1', msgs, trigger_event_id=42)
         insert_call = mock_cursor.execute.call_args_list[0]
         params = insert_call[0][1]
-        assert params[-1] == 42  # TriggerEventId is last param
+        # TriggerEventId is second-to-last param (ContentBlocksJson is last)
+        assert params[-2] == 42
+
+    def test_content_blocks_json_stored(self, mock_conn, mock_cursor):
+        """ContentBlocksJson is passed through to the INSERT."""
+        cbj = '[{"type": "text", "text": "hello"}]'
+        msgs = [{'uuid': 'cbj1', 'role': 'assistant', 'content': 'hello',
+                 'content_blocks_json': cbj}]
+        log_messages(mock_conn, '1', msgs)
+        insert_call = mock_cursor.execute.call_args_list[0]
+        params = insert_call[0][1]
+        assert params[-1] == cbj  # ContentBlocksJson is last param
 
 
 # ---------------------------------------------------------------------------
@@ -231,15 +242,25 @@ class TestLogMessages:
 
 class TestCaptureGitChanges:
     @patch('hooks.db_logger.subprocess.run')
+    def test_uses_merge_sql(self, mock_run, mock_conn, mock_cursor):
+        """Full capture uses MERGE (upsert) to prevent duplicates from Stop+SessionEnd."""
+        mock_run.return_value = make_subprocess_result(
+            stdout="10\t0\tfile.py\n")
+        capture_git_changes(mock_conn, '1')
+        sql = mock_cursor.execute.call_args[0][0]
+        assert 'MERGE' in sql
+
+    @patch('hooks.db_logger.subprocess.run')
     def test_added_file(self, mock_run, mock_conn, mock_cursor):
         mock_run.return_value = make_subprocess_result(
             stdout="10\t0\tfile.py\n")
         capture_git_changes(mock_conn, '1')
-        insert_call = mock_cursor.execute.call_args
-        params = insert_call[0][1]
-        assert params[2] == 'added'  # ChangeType
+        params = mock_cursor.execute.call_args[0][1]
+        # MERGE params: (session, filepath, change, added, deleted, session, filepath, change, added, deleted)
+        assert params[2] == 'added'  # ChangeType (WHEN MATCHED UPDATE)
         assert params[3] == 10  # LinesAdded
         assert params[4] == 0   # LinesDeleted
+        assert params[7] == 'added'  # ChangeType (WHEN NOT MATCHED INSERT)
 
     @patch('hooks.db_logger.subprocess.run')
     def test_deleted_file(self, mock_run, mock_conn, mock_cursor):
@@ -267,6 +288,14 @@ class TestCaptureGitChanges:
         assert params[3] == 0  # LinesAdded (binary dash -> 0)
         assert params[4] == 0  # LinesDeleted (binary dash -> 0)
         assert params[2] == 'modified'  # both 0 -> modified
+
+    @patch('hooks.db_logger.subprocess.run')
+    def test_empty_lines_skipped(self, mock_run, mock_conn, mock_cursor):
+        """Empty lines between data lines in git output are skipped."""
+        mock_run.return_value = make_subprocess_result(
+            stdout="5\t3\tapp.py\n\n2\t0\tnew.py\n")
+        capture_git_changes(mock_conn, '1')
+        assert mock_cursor.execute.call_count == 2  # 2 files, empty line skipped
 
     @patch('hooks.db_logger.subprocess.run')
     def test_git_failure(self, mock_run, mock_conn, mock_cursor):
@@ -307,6 +336,30 @@ class TestCaptureGitChangesIncremental:
         capture_git_changes_incremental(mock_conn, '1')
         sql = mock_cursor.execute.call_args[0][0]
         assert 'MERGE' in sql
+
+    @patch('hooks.db_logger.subprocess.run')
+    def test_added_file(self, mock_run, mock_conn, mock_cursor):
+        """Incremental: file with only additions classified as 'added'."""
+        mock_run.return_value = make_subprocess_result(stdout="8\t0\tnew.py\n")
+        capture_git_changes_incremental(mock_conn, '1')
+        params = mock_cursor.execute.call_args[0][1]
+        assert params[2] == 'added'
+
+    @patch('hooks.db_logger.subprocess.run')
+    def test_deleted_file(self, mock_run, mock_conn, mock_cursor):
+        """Incremental: file with only deletions classified as 'deleted'."""
+        mock_run.return_value = make_subprocess_result(stdout="0\t12\told.py\n")
+        capture_git_changes_incremental(mock_conn, '1')
+        params = mock_cursor.execute.call_args[0][1]
+        assert params[2] == 'deleted'
+
+    @patch('hooks.db_logger.subprocess.run')
+    def test_empty_lines_skipped(self, mock_run, mock_conn, mock_cursor):
+        """Empty lines between data lines in git output are skipped."""
+        mock_run.return_value = make_subprocess_result(
+            stdout="3\t1\tfile.py\n\n1\t0\tother.py\n")
+        capture_git_changes_incremental(mock_conn, '1')
+        assert mock_cursor.execute.call_count == 2  # 2 files, empty line skipped
 
     @patch('hooks.db_logger.subprocess.run', side_effect=Exception("git error"))
     def test_exception(self, mock_run, mock_conn, mock_cursor):

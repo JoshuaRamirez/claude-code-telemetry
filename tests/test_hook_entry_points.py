@@ -30,6 +30,7 @@ STANDARD_HOOKS = [
     ('hooks.db_subagentstop', 'SubagentStop'),
     ('hooks.db_precompact', 'PreCompact'),
     ('hooks.db_notification', 'Notification'),
+    ('hooks.db_sessionend', 'SessionEnd'),
 ]
 
 

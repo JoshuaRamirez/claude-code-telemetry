@@ -112,6 +112,18 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/db_sessionend.py",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import pyodbc
 import pytest
 
 from hooks.db_logger import (
@@ -73,6 +74,27 @@ class TestGetOrCreateSession:
         mock_cursor.fetchone.side_effect = [None, (77,)]
         result = get_or_create_session(mock_conn, claude_session_id='sid-new')
         assert result == '77'
+
+    def test_resume_reopens_ended_session(self, mock_conn, mock_cursor):
+        """Step 2 raises IntegrityError (duplicate ClaudeSessionId), Step 3 reopens."""
+        # Step 1 SELECT -> None (no active session)
+        # Step 2 INSERT -> IntegrityError (duplicate ClaudeSessionId)
+        # Step 3 UPDATE -> (42,) (reopened ended session)
+        mock_cursor.execute.side_effect = [
+            None,  # Step 1: SELECT
+            pyodbc.IntegrityError('23000', 'duplicate key'),  # Step 2: INSERT
+            None,  # Step 3: UPDATE
+        ]
+        mock_cursor.fetchone.side_effect = [None, (42,)]
+        result = get_or_create_session(mock_conn, claude_session_id='sid-resumed')
+        assert result == '42'
+        # Verify rollback was called after IntegrityError (defensive cleanup)
+        mock_conn.rollback.assert_called_once()
+        # Verify UPDATE SET EndedAt = NULL was called (3rd execute call)
+        calls = mock_cursor.execute.call_args_list
+        update_sql = calls[2][0][0]
+        assert 'UPDATE Sessions' in update_sql
+        assert 'EndedAt = NULL' in update_sql
 
     def test_no_row_returned(self, mock_conn, mock_cursor):
         mock_cursor.fetchone.return_value = None
@@ -183,6 +205,19 @@ class TestLogSubagentEvent:
                                      result='approved')
         assert result == 500
         mock_conn.commit.assert_called_once()
+
+    def test_with_tool_use_id(self, mock_conn, mock_cursor):
+        """tool_use_id is passed to the INSERT."""
+        mock_cursor.fetchone.return_value = (501,)
+        result = log_subagent_event(mock_conn, 1, 'test-agent',
+                                     tool_use_id='tu-42')
+        assert result == 501
+        # Verify the SQL includes ToolUseId
+        sql = mock_cursor.execute.call_args[0][0]
+        assert 'ToolUseId' in sql
+        # Verify tu-42 passed as parameter
+        params = mock_cursor.execute.call_args[0][1]
+        assert 'tu-42' in params
 
 
 # ---------------------------------------------------------------------------

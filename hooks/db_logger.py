@@ -17,7 +17,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Optional
 
 import pyodbc
@@ -46,7 +46,12 @@ def get_or_create_session(conn: pyodbc.Connection, working_dir: str = None,
     """Get existing session or create new one. Returns SessionId as string.
 
     v2: Looks up session directly in database by ClaudeSessionId.
-    Eliminates temp file dependency, survives reboots, handles concurrent sessions.
+    v2.1: Three-step approach handles /resume with IntegrityError fallback.
+
+    Steps:
+        1. Find active session by ClaudeSessionId
+        2. Try to create new session (IntegrityError on duplicate ClaudeSessionId)
+        3. If INSERT failed (duplicate), reopen the ended session (/resume case)
 
     Args:
         conn: Database connection
@@ -56,7 +61,7 @@ def get_or_create_session(conn: pyodbc.Connection, working_dir: str = None,
     """
     cursor = conn.cursor()
 
-    # First: Try to find existing session by ClaudeSessionId in DB
+    # Step 1: Find active (non-ended) session by ClaudeSessionId
     if claude_session_id:
         cursor.execute("""
             SELECT SessionId FROM Sessions
@@ -66,18 +71,39 @@ def get_or_create_session(conn: pyodbc.Connection, working_dir: str = None,
         if row:
             return str(row[0])
 
-    # Second: Create new session with ClaudeSessionId
-    cursor.execute("""
-        INSERT INTO Sessions (WorkingDirectory, ProjectName, ClaudeSessionId)
-        OUTPUT INSERTED.SessionId
-        VALUES (?, ?, ?)
-    """, (working_dir or os.getcwd(), project_name, claude_session_id))
+    # Step 2: Try to create new session
+    try:
+        cursor.execute("""
+            INSERT INTO Sessions (WorkingDirectory, ProjectName, ClaudeSessionId)
+            OUTPUT INSERTED.SessionId
+            VALUES (?, ?, ?)
+        """, (working_dir or os.getcwd(), project_name, claude_session_id))
 
-    row = cursor.fetchone()
-    conn.commit()
+        row = cursor.fetchone()
+        conn.commit()
 
-    if row:
-        return str(row[0])
+        if row:
+            return str(row[0])
+    except pyodbc.IntegrityError:
+        # Duplicate ClaudeSessionId — session exists (possibly ended).
+        # Rollback the failed statement to ensure clean transaction state
+        # (defensive: needed if XACT_ABORT is ever set to ON).
+        conn.rollback()
+        # Fall through to Step 3 to reopen it.
+
+    # Step 3: INSERT failed (IntegrityError) — session exists but ended.
+    # This is the /resume case: reopen the ended session.
+    if claude_session_id:
+        cursor.execute("""
+            UPDATE Sessions SET EndedAt = NULL
+            OUTPUT INSERTED.SessionId
+            WHERE ClaudeSessionId = ?
+        """, (claude_session_id,))
+        row = cursor.fetchone()
+        conn.commit()
+        if row:
+            return str(row[0])
+
     return None
 
 
@@ -180,14 +206,19 @@ def log_stop_event(conn: pyodbc.Connection, event_id: int, reason: str) -> Optio
 
 
 def log_subagent_event(conn: pyodbc.Connection, event_id: int, agent_type: str,
-                       task_description: str = None, result: str = None) -> Optional[int]:
-    """Insert subagent event. Returns SubagentEventId."""
+                       task_description: str = None, result: str = None,
+                       tool_use_id: str = None) -> Optional[int]:
+    """Insert subagent event. Returns SubagentEventId.
+
+    Args:
+        tool_use_id: Links to the parent Task tool invocation in ToolInvocations.
+    """
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO SubagentEvents (EventId, AgentType, TaskDescription, Result)
+        INSERT INTO SubagentEvents (EventId, AgentType, TaskDescription, Result, ToolUseId)
         OUTPUT INSERTED.SubagentEventId
-        VALUES (?, ?, ?, ?)
-    """, (event_id, agent_type, task_description, result))
+        VALUES (?, ?, ?, ?, ?)
+    """, (event_id, agent_type, task_description, result, tool_use_id))
 
     row = cursor.fetchone()
     conn.commit()
@@ -309,13 +340,24 @@ def parse_transcript_incremental(conn: pyodbc.Connection, session_id: str,
 
 
 def _parse_transcript_line(obj: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Parse a single transcript line into a message dict."""
+    """Parse a single transcript line into a message dict.
+
+    Handles: user, assistant, system, queue-operation, file-history-snapshot.
+    Skips: progress (streaming noise), saved_hook_context.
+    """
     msg_type = obj.get('type')
 
     if msg_type == 'user':
         content = obj.get('message', {}).get('content', '')
         if isinstance(content, list):
-            content = json.dumps(content)
+            # Extract text from content blocks instead of raw JSON dump
+            text_parts = []
+            for item in content:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif isinstance(item, dict) and item.get('type') == 'text':
+                    text_parts.append(item.get('text', ''))
+            content = '\n'.join(text_parts) if text_parts else json.dumps(content)
         return {
             'uuid': obj.get('uuid'),
             'parent_uuid': obj.get('parentUuid'),
@@ -324,7 +366,8 @@ def _parse_transcript_line(obj: dict[str, Any]) -> Optional[dict[str, Any]]:
             'model': None,
             'timestamp': obj.get('timestamp'),
             'thinking_content': None,
-            'usage': None
+            'usage': None,
+            'content_blocks_json': None
         }
 
     elif msg_type == 'assistant':
@@ -332,6 +375,7 @@ def _parse_transcript_line(obj: dict[str, Any]) -> Optional[dict[str, Any]]:
         content_blocks = msg_data.get('content', [])
         text_parts = []
         thinking_parts = []
+        tool_use_parts = []
 
         for block in content_blocks:
             if isinstance(block, dict):
@@ -339,6 +383,13 @@ def _parse_transcript_line(obj: dict[str, Any]) -> Optional[dict[str, Any]]:
                     text_parts.append(block.get('text', ''))
                 elif block.get('type') == 'thinking':
                     thinking_parts.append(block.get('thinking', ''))
+                elif block.get('type') == 'tool_use':
+                    tool_use_parts.append({
+                        'type': 'tool_use',
+                        'id': block.get('id'),
+                        'name': block.get('name'),
+                        'input': block.get('input')
+                    })
 
         usage = msg_data.get('usage', {})
         usage_data = None
@@ -351,7 +402,15 @@ def _parse_transcript_line(obj: dict[str, Any]) -> Optional[dict[str, Any]]:
                 'service_tier': usage.get('service_tier')
             }
 
-        if text_parts or thinking_parts or usage_data:
+        if text_parts or thinking_parts or tool_use_parts or usage_data:
+            # Preserve thinking block boundaries: single = plain text, multiple = JSON array
+            if len(thinking_parts) > 1:
+                thinking_content = json.dumps(thinking_parts)
+            elif thinking_parts:
+                thinking_content = thinking_parts[0]
+            else:
+                thinking_content = None
+
             return {
                 'uuid': obj.get('uuid'),
                 'parent_uuid': obj.get('parentUuid'),
@@ -359,10 +418,56 @@ def _parse_transcript_line(obj: dict[str, Any]) -> Optional[dict[str, Any]]:
                 'content': '\n'.join(text_parts) if text_parts else None,
                 'model': msg_data.get('model'),
                 'timestamp': obj.get('timestamp'),
-                'thinking_content': '\n'.join(thinking_parts) if thinking_parts else None,
-                'usage': usage_data
+                'thinking_content': thinking_content,
+                'usage': usage_data,
+                'content_blocks_json': json.dumps(content_blocks) if content_blocks else None
             }
 
+    elif msg_type == 'system':
+        return {
+            'uuid': None,
+            'parent_uuid': None,
+            'role': 'system',
+            'content': json.dumps(obj),
+            'model': None,
+            'timestamp': obj.get('timestamp'),
+            'thinking_content': None,
+            'usage': None,
+            'content_blocks_json': None
+        }
+
+    elif msg_type == 'queue-operation':
+        content = obj.get('content')
+        if content is None:
+            content = json.dumps(obj)
+        elif not isinstance(content, str):
+            content = json.dumps(content)
+        return {
+            'uuid': None,
+            'parent_uuid': None,
+            'role': 'queue_operation',
+            'content': content,
+            'model': None,
+            'timestamp': obj.get('timestamp'),
+            'thinking_content': None,
+            'usage': None,
+            'content_blocks_json': None
+        }
+
+    elif msg_type == 'file-history-snapshot':
+        return {
+            'uuid': None,
+            'parent_uuid': None,
+            'role': 'file_history',
+            'content': json.dumps(obj),
+            'model': None,
+            'timestamp': obj.get('timestamp'),
+            'thinking_content': None,
+            'usage': None,
+            'content_blocks_json': None
+        }
+
+    # Skip: progress (streaming noise), saved_hook_context, unknown types
     return None
 
 
@@ -420,38 +525,41 @@ def log_token_usage(conn: pyodbc.Connection, session_id: str, messages: list[dic
         msg_uuid = msg.get('uuid')
         model = msg.get('model')
 
-        # Check if already logged
-        if msg_uuid:
-            cursor.execute("SELECT 1 FROM TokenUsage WHERE MessageUuid = ?", (msg_uuid,))
-            if cursor.fetchone():
-                continue
-
         cost = calculate_cost(
             model,
             usage.get('input_tokens'),
             usage.get('output_tokens')
         )
 
-        cursor.execute("""
-            INSERT INTO TokenUsage (SessionId, MessageUuid, Model, InputTokens, OutputTokens,
-                                    CacheCreationTokens, CacheReadTokens, ServiceTier, EstimatedCostUsd)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            session_id,
-            msg_uuid,
-            model,
-            usage.get('input_tokens'),
-            usage.get('output_tokens'),
-            usage.get('cache_creation_tokens'),
-            usage.get('cache_read_tokens'),
-            usage.get('service_tier'),
-            cost
-        ))
+        try:
+            cursor.execute("""
+                INSERT INTO TokenUsage (SessionId, MessageUuid, Model, InputTokens, OutputTokens,
+                                        CacheCreationTokens, CacheReadTokens, ServiceTier, EstimatedCostUsd)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                session_id,
+                msg_uuid,
+                model,
+                usage.get('input_tokens'),
+                usage.get('output_tokens'),
+                usage.get('cache_creation_tokens'),
+                usage.get('cache_read_tokens'),
+                usage.get('service_tier'),
+                cost
+            ))
+        except pyodbc.IntegrityError:
+            # Duplicate MessageUuid — already exists, skip.
+            conn.rollback()  # Clean transaction state (defensive)
+            continue
     conn.commit()
 
 
 def capture_git_changes(conn: pyodbc.Connection, session_id: str):
-    """Capture git diff for the session."""
+    """Capture git diff for the session.
+
+    Uses MERGE (upsert) so calling multiple times (e.g. Stop + SessionEnd)
+    updates existing rows instead of creating duplicates.
+    """
     try:
         result = subprocess.run(
             ['git', 'diff', '--numstat', 'HEAD'],
@@ -478,9 +586,16 @@ def capture_git_changes(conn: pyodbc.Connection, session_id: str):
                     change_type = 'modified'
 
                 cursor.execute("""
-                    INSERT INTO GitChanges (SessionId, FilePath, ChangeType, LinesAdded, LinesDeleted)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (session_id, filepath, change_type, added, deleted))
+                    MERGE GitChanges AS target
+                    USING (SELECT ? AS SessionId, ? AS FilePath) AS source
+                    ON target.SessionId = source.SessionId AND target.FilePath = source.FilePath
+                    WHEN MATCHED THEN
+                        UPDATE SET ChangeType = ?, LinesAdded = ?, LinesDeleted = ?, RecordedAt = GETUTCDATE()
+                    WHEN NOT MATCHED THEN
+                        INSERT (SessionId, FilePath, ChangeType, LinesAdded, LinesDeleted)
+                        VALUES (?, ?, ?, ?, ?);
+                """, (session_id, filepath, change_type, added, deleted,
+                      session_id, filepath, change_type, added, deleted))
 
         conn.commit()
     except Exception as e:
@@ -543,26 +658,22 @@ def capture_git_changes_incremental(conn: pyodbc.Connection, session_id: str, fi
 
 
 def log_messages(conn: pyodbc.Connection, session_id: str, messages: list[dict[str, Any]],
-                 deduplicate: bool = False, trigger_event_id: int = None):
+                 trigger_event_id: int = None):
     """Insert parsed messages into Messages table.
 
-    v2: Added trigger_event_id to link messages to the event that caused logging.
+    Deduplication is handled automatically by the unique filtered index on
+    Messages.MessageUuid — duplicate INSERTs raise IntegrityError and are skipped.
+    NULL-uuid rows (system/queue) always insert (excluded from unique index).
 
     Args:
         conn: Database connection
         session_id: Session ID
         messages: List of message dicts
-        deduplicate: If True, skip messages that already exist (by MessageUuid)
         trigger_event_id: EventId that triggered this message logging
     """
     cursor = conn.cursor()
     for msg in messages:
         msg_uuid = msg.get('uuid')
-
-        if deduplicate and msg_uuid:
-            cursor.execute("SELECT 1 FROM Messages WHERE MessageUuid = ?", (msg_uuid,))
-            if cursor.fetchone():
-                continue
 
         ts = msg.get('timestamp')
         if ts and isinstance(ts, str):
@@ -570,20 +681,28 @@ def log_messages(conn: pyodbc.Connection, session_id: str, messages: list[dict[s
             if '.' in ts:
                 ts = ts[:26]
 
-        cursor.execute("""
-            INSERT INTO Messages (SessionId, MessageUuid, ParentUuid, Role, Content, Model, Timestamp, ThinkingContent, TriggerEventId)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            session_id,
-            msg_uuid,
-            msg.get('parent_uuid'),
-            msg.get('role'),
-            msg.get('content'),
-            msg.get('model'),
-            ts,
-            msg.get('thinking_content'),
-            trigger_event_id
-        ))
+        try:
+            cursor.execute("""
+                INSERT INTO Messages (SessionId, MessageUuid, ParentUuid, Role, Content,
+                                      Model, Timestamp, ThinkingContent, TriggerEventId, ContentBlocksJson)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                session_id,
+                msg_uuid,
+                msg.get('parent_uuid'),
+                msg.get('role'),
+                msg.get('content'),
+                msg.get('model'),
+                ts,
+                msg.get('thinking_content'),
+                trigger_event_id,
+                msg.get('content_blocks_json')
+            ))
+        except pyodbc.IntegrityError:
+            # Duplicate MessageUuid — already exists, skip.
+            # NULL-uuid rows (system/queue) always insert (not in unique index).
+            conn.rollback()  # Clean transaction state (defensive)
+            continue
     conn.commit()
 
 
@@ -645,8 +764,9 @@ def log_event(event_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
     """Main entry point for logging any hook event.
 
     Args:
-        event_type: One of 'PreToolUse', 'PostToolUse', 'Stop', 'UserPromptSubmit',
-                   'SessionStart', 'SubagentStop', 'PreCompact', 'Notification'
+        event_type: One of 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd',
+                   'UserPromptSubmit', 'SessionStart', 'SubagentStop',
+                   'PreCompact', 'Notification'
         input_data: The JSON data passed to the hook
 
     Returns:
@@ -682,7 +802,7 @@ def log_event(event_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
             tool_name = input_data.get('tool_name', 'Unknown')
             tool_input = input_data.get('tool_input', {})
             tool_use_id = input_data.get('tool_use_id')
-            started_at = datetime.utcnow()
+            started_at = datetime.now(UTC)
 
             log_tool_invocation(conn, event_id, tool_name, tool_input,
                                 tool_use_id=tool_use_id, started_at=started_at)
@@ -690,7 +810,7 @@ def log_event(event_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
         elif event_type == 'PostToolUse':
             tool_name = input_data.get('tool_name')
             tool_use_id = input_data.get('tool_use_id')
-            completed_at = datetime.utcnow()
+            completed_at = datetime.now(UTC)
 
             # Capture tool response
             tool_response_raw = input_data.get('tool_response')
@@ -710,18 +830,18 @@ def log_event(event_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
             if transcript_path:
                 messages = parse_transcript_incremental(conn, session_id, transcript_path)
                 if messages:
-                    log_messages(conn, session_id, messages, deduplicate=True, trigger_event_id=event_id)
+                    log_messages(conn, session_id, messages, trigger_event_id=event_id)
                     log_token_usage(conn, session_id, messages)
 
         elif event_type == 'UserPromptSubmit':
-            prompt = input_data.get('prompt', '')
+            prompt = input_data.get('prompt') or input_data.get('user_prompt', '')
             log_user_prompt(conn, event_id, prompt)
 
             # Incrementally log messages and tokens
             if transcript_path:
                 messages = parse_transcript_incremental(conn, session_id, transcript_path)
                 if messages:
-                    log_messages(conn, session_id, messages, deduplicate=True, trigger_event_id=event_id)
+                    log_messages(conn, session_id, messages, trigger_event_id=event_id)
                     log_token_usage(conn, session_id, messages)
 
         elif event_type == 'Stop':
@@ -732,13 +852,13 @@ def log_event(event_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
             if transcript_path:
                 messages = parse_transcript(transcript_path)
                 if messages:
-                    log_messages(conn, session_id, messages, deduplicate=True, trigger_event_id=event_id)
+                    log_messages(conn, session_id, messages, trigger_event_id=event_id)
                     log_token_usage(conn, session_id, messages)
 
-            # Capture final git changes
+            # Capture git changes (not final — session may continue or resume)
             capture_git_changes(conn, session_id)
-
-            close_session(conn, session_id)
+            # NOTE: close_session moved to SessionEnd handler (Phase 4).
+            # Stop events don't close sessions because the user may continue.
 
         elif event_type == 'SessionStart':
             model = input_data.get('model')
@@ -748,10 +868,12 @@ def log_event(event_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
         elif event_type == 'SubagentStop':
             agent_type = input_data.get('agent_type', 'Unknown')
             task_description = input_data.get('task_description')
+            tool_use_id = input_data.get('tool_use_id')
             result = input_data.get('result')
             if result is not None and not isinstance(result, str):
                 result = json.dumps(result)
-            log_subagent_event(conn, event_id, agent_type, task_description, result)
+            log_subagent_event(conn, event_id, agent_type, task_description, result,
+                               tool_use_id=tool_use_id)
 
         elif event_type == 'PreCompact':
             summary_content = input_data.get('summary_content')
@@ -765,6 +887,18 @@ def log_event(event_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
             if notification_content is not None and not isinstance(notification_content, str):
                 notification_content = json.dumps(notification_content)
             log_notification_event(conn, event_id, notification_type, notification_content)
+
+        elif event_type == 'SessionEnd':
+            # Final full parse to ensure nothing missed
+            if transcript_path:
+                messages = parse_transcript(transcript_path)
+                if messages:
+                    log_messages(conn, session_id, messages, trigger_event_id=event_id)
+                    log_token_usage(conn, session_id, messages)
+            # Capture final git changes
+            capture_git_changes(conn, session_id)
+            # Authoritative session close — only SessionEnd sets EndedAt
+            close_session(conn, session_id)
 
         return {}
 
